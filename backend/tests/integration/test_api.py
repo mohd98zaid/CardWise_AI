@@ -6,19 +6,32 @@ from app.core.ratelimit import reset_rate_limits
 from app.main import app
 
 
-def authenticated_client(email: str | None = None) -> tuple[TestClient, dict[str, str]]:
+def authenticated_client(
+    email: str | None = None, role: str = "user"
+) -> tuple[TestClient, dict[str, str]]:
     reset_rate_limits()
     client = TestClient(app)
     address = email or f"{uuid4().hex}@example.com"
-    response = client.post(
-        "/api/v1/auth/register",
-        json={"email": address, "password": "password123"},
-    )
-    if response.status_code == 409:
+    if role == "admin":
+        from app.db.database import SessionLocal
+        from app.services.admin import provision_admin_user
+
+        with SessionLocal() as db:
+            provision_admin_user(db, address, "password123", role="admin")
         response = client.post(
             "/api/v1/auth/login",
             json={"email": address, "password": "password123"},
         )
+    else:
+        response = client.post(
+            "/api/v1/auth/register",
+            json={"email": address, "password": "password123"},
+        )
+        if response.status_code == 409:
+            response = client.post(
+                "/api/v1/auth/login",
+                json={"email": address, "password": "password123"},
+            )
     assert response.status_code in {200, 201}
     return client, {"Authorization": f"Bearer {response.json()['access_token']}"}
 
@@ -67,7 +80,7 @@ def test_scenarios_are_isolated_between_users() -> None:
 
 
 def test_rule_publication_requires_review_and_records_admin_action() -> None:
-    client, headers = authenticated_client("admin@cardwise.local")
+    client, headers = authenticated_client("admin@cardwise.local", role="admin")
     review = client.post(
         "/api/v1/admin/rules/synthetic-online-cashback-v1/review?decision=approved",
         headers=headers,
