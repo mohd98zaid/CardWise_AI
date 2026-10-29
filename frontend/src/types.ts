@@ -68,6 +68,7 @@ export type CalculationResult = {
 };
 
 export type SpendInput = {
+  id?: string;
   category: string;
   channel: string;
   amount: string;
@@ -98,11 +99,18 @@ export type Comparison = {
 export type OptimizerResult = {
   scenario_id: string;
   method_version: string;
+  plan_status: string;
   baseline_value: string;
   proposed_value: string;
   incremental_value: string;
+  has_cap_uncertainty?: boolean;
+  conservative_proposed_value?: string;
+  conservative_incremental_value?: string;
   total_spend_preserved: boolean;
+  planned_spend?: string;
+  allocated_spend?: string;
   allocations: Array<Record<string, string | null>>;
+  excluded?: Array<{ category: string; channel: string; amount: string; reason: string }>;
   warnings: string[];
 };
 

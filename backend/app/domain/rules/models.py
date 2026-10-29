@@ -1,6 +1,6 @@
 from datetime import date
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -32,7 +32,7 @@ class CashbackRule(BaseModel):
     schema_version: Literal[1]
     rule_id: str = Field(min_length=1)
     card_variant_id: str = Field(min_length=1)
-    rule_type: RuleType
+    rule_type: Literal["cashback_rate"]
     parameters: CashbackRateParameters
     effective_from: date
     effective_to: date | None = None
@@ -85,3 +85,6 @@ class PointsRule(BaseModel):
         return self.effective_from <= scenario_date and (
             self.effective_to is None or scenario_date <= self.effective_to
         )
+
+
+RuleModel = Annotated[CashbackRule | PointsRule, Field(discriminator="rule_type")]

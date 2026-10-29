@@ -93,7 +93,7 @@ def choose_best_cards(
         if cap_amt is not None and not is_cap_known:
             warnings.append(
                 f"Card '{card_id}' has a reward cap, but prior cap usage is unknown. "
-                "Optimization assumes zero prior cap consumed for bounding."
+                "Optimization calculates both upper-bound and conservative bounds."
             )
 
         card_specs[card_id] = CardSpec(
@@ -138,7 +138,17 @@ def choose_best_cards(
             )
             continue
 
-        if is_fixed and b_card:
+        if is_fixed:
+            if not b_card:
+                excluded.append(
+                    {
+                        "category": cat,
+                        "channel": chan,
+                        "amount": str(amt),
+                        "reason": "Fixed spending bucket requires an assigned baseline card.",
+                    }
+                )
+                continue
             if b_card not in eligible_cards:
                 excluded.append(
                     {
@@ -185,7 +195,11 @@ def choose_best_cards(
         }
 
     # Helper to compute total reward under shared caps given an assignment of buckets -> cards
-    def evaluate_assignment(assignment: tuple[str, ...]) -> tuple[Decimal, dict[str, Decimal]]:
+    def evaluate_assignment(
+        assignment: tuple[str, ...],
+        *,
+        conservative: bool = False,
+    ) -> tuple[Decimal, dict[str, Decimal]]:
         card_gross: dict[str, Decimal] = {cid: Decimal("0.00") for cid in card_specs}
         for b_eval, card_id in zip(buckets, assignment, strict=True):
             card_gross[card_id] += b_eval.gross_by_card[card_id]
@@ -195,7 +209,10 @@ def choose_best_cards(
         for cid, gross in card_gross.items():
             spec = card_specs[cid]
             if spec.cap_amount is not None:
-                cap_rem = max(Decimal("0.00"), spec.cap_amount - spec.initial_consumed)
+                if conservative and not spec.is_cap_known:
+                    cap_rem = Decimal("0.00")
+                else:
+                    cap_rem = max(Decimal("0.00"), spec.cap_amount - spec.initial_consumed)
                 reward = min(gross, cap_rem)
             else:
                 reward = gross
@@ -274,12 +291,27 @@ def choose_best_cards(
             }
         )
 
-    plan_status = "optimal" if total_spend_preserved else "partial"
+    has_cap_uncertainty = any(
+        s.cap_amount is not None and not s.is_cap_known for s in card_specs.values()
+    )
+    conservative_proposed_total, _ = evaluate_assignment(best_assignment, conservative=True)
+    conservative_baseline_total, _ = evaluate_assignment(baseline_assignment, conservative=True)
+
     if not total_spend_preserved:
+        plan_status = "partial"
         warnings.append(
             f"Partial allocation: {len(excluded)} spending bucket(s) could not be "
             "allocated to any eligible card."
         )
+    elif has_cap_uncertainty:
+        plan_status = "uncertain"
+        warnings.append(
+            "Reward estimate has uncertainty: prior cap usage is unknown for one or more capped "
+            f"cards. Upper-bound proposed reward is ₹{_money(proposed_total)}, while "
+            f"conservative estimate is ₹{_money(conservative_proposed_total)}."
+        )
+    else:
+        plan_status = "optimal"
 
     return {
         "method_version": OPTIMIZER_VERSION,
@@ -287,6 +319,11 @@ def choose_best_cards(
         "baseline_value": str(_money(baseline_total)),
         "proposed_value": str(_money(proposed_total)),
         "incremental_value": str(_money(proposed_total - baseline_total)),
+        "has_cap_uncertainty": has_cap_uncertainty,
+        "conservative_proposed_value": str(_money(conservative_proposed_total)),
+        "conservative_incremental_value": str(
+            _money(conservative_proposed_total - conservative_baseline_total)
+        ),
         "total_spend_preserved": total_spend_preserved,
         "planned_spend": str(total_planned),
         "allocated_spend": str(allocated_total),

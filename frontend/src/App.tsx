@@ -81,53 +81,225 @@ function Workspace({ token, user, onLogout }: { token: string; user: User; onLog
   const [tab, setTab] = useState<Tab>("dashboard");
   const [cards, setCards] = useState<CardVariant[]>([]);
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
-  const [portfolio, setPortfolio] = useState<Array<{ card_variant_id: string; display_name: string }>>([]);
+  const [portfolio, setPortfolio] = useState<Array<{ id?: string; card_variant_id: string; display_name: string; nickname?: string | null }>>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [comparison, setComparison] = useState<Comparison | null>(null);
   const [optimizer, setOptimizer] = useState<OptimizerResult | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState<boolean>(false);
 
   async function reload() {
+    setLoading(true);
     try {
-      const [loadedCards, loadedScenarios, loadedPortfolio, loadedReminders] = await Promise.all([getCards(), getScenarios(token), getPortfolio(token), getReminders(token)]);
-      setCards(loadedCards); setScenarios(loadedScenarios); setPortfolio(loadedPortfolio); setReminders(loadedReminders);
-    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Could not load workspace."); }
+      const [loadedCards, loadedScenarios, loadedPortfolio, loadedReminders] = await Promise.all([
+        getCards(),
+        getScenarios(token),
+        getPortfolio(token),
+        getReminders(token),
+      ]);
+      setCards(loadedCards);
+      setScenarios(loadedScenarios);
+      setPortfolio(loadedPortfolio);
+      setReminders(loadedReminders);
+      setError(null);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Could not load workspace.");
+    } finally {
+      setLoading(false);
+    }
   }
   useEffect(() => { void reload(); }, [token]);
+
   async function saveScenario(payload: { name: string; scenario_date: string; currency: string; spend: SpendInput[] }) {
-    try { const created = await createScenario(token, payload); setScenarios((items) => [created, ...items]); setTab("scenarios"); setNotice("Scenario saved. You can now compare it or send it to the optimizer."); }
-    catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Scenario could not be saved."); }
-  }
-  async function compare(id: string, cardIds: string[]) {
-    try { setComparison(await compareScenario(token, id, cardIds)); setTab("scenarios"); setNotice("Comparison calculated from the current scenario revision."); }
-    catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Comparison failed."); }
-  }
-  async function optimize(id: string, cardIds: string[]) {
-    if (cardIds.length === 0) { setError("Add an existing card reference from Catalogue before running the optimizer."); setTab("catalogue"); return; }
     try {
-      setOptimizer(await runOptimizer(token, id, cardIds)); setTab("optimizer");
-    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Optimization failed."); }
+      const created = await createScenario(token, payload);
+      setScenarios((items) => [created, ...items]);
+      setTab("scenarios");
+      setNotice("Scenario saved. You can now compare it or send it to the optimizer.");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Scenario could not be saved.");
+    }
   }
 
-  return <main className="app-shell">
-    <header className="app-header"><a className="brand" href="#dashboard" onClick={() => setTab("dashboard")}><span className="brand-mark">cw</span><span>CardWise <em>AI</em></span></a><div className="header-actions"><span className="user-pill">{user.email}</span><button className="text-button" onClick={onLogout}>Sign out</button></div></header>
-    <div className="app-layout">
-      <nav className="sidebar" aria-label="Main navigation">{(["dashboard", "portfolio", "catalogue", "scenarios", "optimizer", "assistant", "settings"] as Tab[]).map((item) => <button key={item} className={tab === item ? "nav-item active" : "nav-item"} onClick={() => setTab(item)}><span className={`nav-icon ${item}`}>{item === "dashboard" ? "⌂" : item === "portfolio" ? "▣" : item === "catalogue" ? "▦" : item === "scenarios" ? "⌁" : item === "optimizer" ? "↗" : item === "assistant" ? "✦" : "⚙"}</span>{item[0].toUpperCase() + item.slice(1)}</button>)}</nav>
-      <section className="content"><div className="content-top"><div><div className="eyebrow">PRIVATE WORKSPACE</div><h1>{tab === "dashboard" ? "Good planning starts with known assumptions." : tab[0].toUpperCase() + tab.slice(1)}</h1></div><span className="alpha-badge">Synthetic alpha</span></div>
-        {notice && <div className="success-banner" role="status">✓ {notice}<button onClick={() => setNotice(null)}>×</button></div>}
-        {error && <div className="error-banner" role="alert">{error}<button onClick={() => setError(null)}>×</button></div>}
-        {tab === "dashboard" && <Dashboard cards={cards} scenarios={scenarios} reminders={reminders} onNavigate={setTab} />}
-        {tab === "portfolio" && <Portfolio cards={cards} portfolio={portfolio} onRemove={async (id) => { await removePortfolioCard(token, id); await reload(); setNotice("Card reference removed from your portfolio."); }} />}
-        {tab === "catalogue" && <Catalogue cards={cards} onAdd={async (id) => { await addPortfolioCard(token, id); await reload(); setNotice("Card reference added to your portfolio."); }} />}
-        {tab === "scenarios" && <Scenarios cards={cards} scenarios={scenarios} comparison={comparison} onSave={saveScenario} onDuplicate={async (id) => { const copy = await duplicateScenario(token, id); setScenarios((items) => [copy, ...items]); setNotice("Scenario duplicated."); }} onCompare={compare} onOptimize={(id) => optimize(id, portfolio.map((item) => item.card_variant_id))} />}
-        {tab === "optimizer" && <Optimizer scenarios={scenarios} cards={cards} portfolio={portfolio} result={optimizer} onRun={optimize} />}
-        {tab === "assistant" && <Assistant token={token} />}
-        {tab === "settings" && <Settings token={token} reminders={reminders} onReminder={async (label, dueAt) => { const reminder = await createReminder(token, label, dueAt); setReminders((items) => [...items, reminder]); setNotice("Reminder saved."); }} onExport={async () => { const exportFile = await createExport(token); setNotice(`Export created — expires ${new Date(exportFile.expires_at).toLocaleString()}. Contains: your account data, scenarios, and reminders. Export ID: ${exportFile.id}`); }} onDeleteReminder={async (id) => { await deleteReminder(token, id); setReminders((items) => items.filter((r) => r.id !== id)); }} onDelete={async () => { await deleteAccount(token); onLogout(); }} />}
-      </section>
-    </div>
-    <footer><span>CardWise AI · Estimates, not guarantees</span><span>Calculator engine 0.1.0</span></footer>
-  </main>;
+  async function compare(id: string, cardIds: string[]) {
+    try {
+      setComparison(await compareScenario(token, id, cardIds));
+      setTab("scenarios");
+      setNotice("Comparison calculated from the current scenario revision.");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Comparison failed.");
+    }
+  }
+
+  async function optimize(id: string, cardIds: string[]) {
+    if (cardIds.length === 0) {
+      setError("Please add at least one owned card to your portfolio before running the optimizer.");
+      setTab("catalogue");
+      return;
+    }
+    try {
+      setOptimizer(await runOptimizer(token, id, cardIds));
+      setTab("optimizer");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Optimization failed.");
+    }
+  }
+
+  return (
+    <main className="app-shell">
+      <header className="app-header">
+        <a className="brand" href="#dashboard" onClick={() => setTab("dashboard")}>
+          <span className="brand-mark">cw</span>
+          <span>CardWise <em>AI</em></span>
+        </a>
+        <div className="header-actions">
+          <span className="user-pill">{user.email}</span>
+          <button className="text-button" onClick={onLogout}>Sign out</button>
+        </div>
+      </header>
+      <div className="app-layout">
+        <nav className="sidebar" aria-label="Main navigation">
+          {(["dashboard", "portfolio", "catalogue", "scenarios", "optimizer", "assistant", "settings"] as Tab[]).map((item) => (
+            <button
+              key={item}
+              className={tab === item ? "nav-item active" : "nav-item"}
+              onClick={() => setTab(item)}
+            >
+              <span className={`nav-icon ${item}`}>
+                {item === "dashboard" ? "⌂" : item === "portfolio" ? "▣" : item === "catalogue" ? "▦" : item === "scenarios" ? "⌁" : item === "optimizer" ? "↗" : item === "assistant" ? "✦" : "⚙"}
+              </span>
+              {item[0].toUpperCase() + item.slice(1)}
+            </button>
+          ))}
+        </nav>
+        <section className="content">
+          <div className="content-top">
+            <div>
+              <div className="eyebrow">PRIVATE WORKSPACE</div>
+              <h1>{tab === "dashboard" ? "Good planning starts with known assumptions." : tab[0].toUpperCase() + tab.slice(1)}</h1>
+            </div>
+            <span className="alpha-badge">{loading ? "Updating…" : "Synthetic alpha"}</span>
+          </div>
+          {notice && <div className="success-banner" role="status">✓ {notice}<button onClick={() => setNotice(null)}>×</button></div>}
+          {error && (
+            <div className="error-banner" role="alert">
+              <span>{error}</span>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button className="text-button" style={{ color: "inherit", textDecoration: "underline" }} onClick={() => void reload()}>
+                  Retry
+                </button>
+                <button onClick={() => setError(null)}>×</button>
+              </div>
+            </div>
+          )}
+          {tab === "dashboard" && <Dashboard cards={cards} scenarios={scenarios} reminders={reminders} onNavigate={setTab} />}
+          {tab === "portfolio" && (
+            <Portfolio
+              cards={cards}
+              portfolio={portfolio}
+              onRemove={async (id) => {
+                try {
+                  await removePortfolioCard(token, id);
+                  await reload();
+                  setNotice("Card reference removed from your portfolio.");
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "Failed to remove card.");
+                }
+              }}
+            />
+          )}
+          {tab === "catalogue" && (
+            <Catalogue
+              cards={cards}
+              onAdd={async (id) => {
+                try {
+                  await addPortfolioCard(token, id);
+                  await reload();
+                  setNotice("Card reference added to your portfolio.");
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "Failed to add card.");
+                }
+              }}
+            />
+          )}
+          {tab === "scenarios" && (
+            <Scenarios
+              cards={cards}
+              scenarios={scenarios}
+              comparison={comparison}
+              onSave={saveScenario}
+              onDuplicate={async (id) => {
+                try {
+                  const copy = await duplicateScenario(token, id);
+                  setScenarios((items) => [copy, ...items]);
+                  setNotice("Scenario duplicated.");
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "Failed to duplicate scenario.");
+                }
+              }}
+              onCompare={compare}
+              onOptimize={(id) => optimize(id, portfolio.map((item) => item.card_variant_id))}
+            />
+          )}
+          {tab === "optimizer" && (
+            <Optimizer
+              scenarios={scenarios}
+              cards={cards}
+              portfolio={portfolio}
+              result={optimizer}
+              onRun={optimize}
+            />
+          )}
+          {tab === "assistant" && <Assistant token={token} />}
+          {tab === "settings" && (
+            <Settings
+              token={token}
+              reminders={reminders}
+              onReminder={async (label, dueAt) => {
+                try {
+                  const reminder = await createReminder(token, label, dueAt);
+                  setReminders((items) => [...items, reminder]);
+                  setNotice("Reminder saved.");
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "Failed to save reminder.");
+                }
+              }}
+              onExport={async () => {
+                try {
+                  const exportFile = await createExport(token);
+                  setNotice(`Export created — expires ${new Date(exportFile.expires_at).toLocaleString()}. Contains: your account data, scenarios, and reminders. Export ID: ${exportFile.id}`);
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "Failed to create export.");
+                }
+              }}
+              onDeleteReminder={async (id) => {
+                try {
+                  await deleteReminder(token, id);
+                  setReminders((items) => items.filter((r) => r.id !== id));
+                  setNotice("Reminder deleted.");
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "Failed to delete reminder.");
+                }
+              }}
+              onDelete={async () => {
+                try {
+                  await deleteAccount(token);
+                  onLogout();
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "Failed to delete account.");
+                }
+              }}
+            />
+          )}
+        </section>
+      </div>
+      <footer>
+        <span>CardWise AI · Estimates, not guarantees</span>
+        <span>Calculator engine 0.1.0</span>
+      </footer>
+    </main>
+  );
 }
 
 function Dashboard({ cards, scenarios, reminders, onNavigate }: { cards: CardVariant[]; scenarios: Scenario[]; reminders: Reminder[]; onNavigate: (tab: Tab) => void }) {
@@ -246,15 +418,136 @@ function ComparisonView({ comparison, cards }: { comparison: Comparison; cards: 
   return <div className="comparison-box"><div className="eyebrow">LATEST COMPARISON</div>{comparison.results.map((result) => <div key={result.card_variant_id}><div className="compare-row"><span>{cards.find((card) => card.id === result.card_variant_id)?.display_name ?? result.card_variant_id}</span><strong>{money(result.estimated_net_value)}</strong></div><details className="trace"><summary>View bucket trace <span>{result.buckets.length} buckets</span></summary>{result.buckets.map((bucket, index) => <div className="allocation-row" key={index}><span>{bucket.status.replaceAll("_", " ")}</span><strong>{bucket.trace.length} steps</strong></div>)}</details></div>)}<p className="muted">Values may be unknown when cap usage is not supplied. Every bucket retains its rule and evidence trace.</p></div>;
 }
 
-function Optimizer({ scenarios, cards, portfolio, result, onRun }: { scenarios: Scenario[]; cards: CardVariant[]; portfolio: Array<{ card_variant_id: string }>; result: OptimizerResult | null; onRun: (id: string, cards: string[]) => void }) {
+function Optimizer({ scenarios, cards, portfolio, result, onRun }: { scenarios: Scenario[]; cards: CardVariant[]; portfolio: Array<{ id?: string; card_variant_id: string }>; result: OptimizerResult | null; onRun: (id: string, cards: string[]) => void }) {
   const [scenarioId, setScenarioId] = useState(scenarios[0]?.id ?? "");
+  const ownedIds = new Set(portfolio.map((item) => item.card_variant_id));
+  const ownedCards = cards.filter((card) => ownedIds.has(card.id));
   const [selected, setSelected] = useState<string[]>(portfolio.map((item) => item.card_variant_id));
-  useEffect(() => { if (!scenarioId && scenarios[0]) setScenarioId(scenarios[0].id); }, [scenarios, scenarioId]);
-  return <div className="optimizer-layout"><div className="panel"><div className="eyebrow">CONSTRAINED ALLOCATION</div><h2>Optimize existing spend</h2><p className="muted">Only selected card references are eligible. Total planned spend is preserved per bucket.</p><label>Scenario<select value={scenarioId} onChange={(event) => setScenarioId(event.target.value)}>{scenarios.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name}</option>)}</select></label><fieldset><legend>Cards available to optimizer</legend>{cards.map((card) => <label className="check-label" key={card.id}><input type="checkbox" checked={selected.includes(card.id)} onChange={(event) => setSelected((items) => event.target.checked ? [...items, card.id] : items.filter((id) => id !== card.id))} />{card.display_name}<small>{portfolio.some((item) => item.card_variant_id === card.id) ? "Owned reference" : "Will be added as a local reference"}</small></label>)}</fieldset><button className="primary-button" disabled={!scenarioId || selected.length === 0} onClick={() => onRun(scenarioId, selected)}>Run optimizer <span>↗</span></button></div><div className="panel optimizer-result">{result ? <><div className="eyebrow">RESULT · {result.method_version}</div><h2>Spend preserved, value compared.</h2><div className="optimizer-metrics"><Metric label="Baseline" value={money(result.baseline_value)} /><Metric label="Proposed" value={money(result.proposed_value)} /><Metric label="Incremental" value={money(result.incremental_value)} /></div><div className="success-banner">✓ Total planned spend preserved: {String(result.total_spend_preserved)}</div>{result.allocations.map((allocation, index) => {
-    const proposedName = cards.find((c) => c.id === allocation.proposed_card_variant_id)?.display_name ?? allocation.proposed_card_variant_id;
-    const baselineName = allocation.baseline_card_variant_id ? (cards.find((c) => c.id === allocation.baseline_card_variant_id)?.display_name ?? allocation.baseline_card_variant_id) : null;
-    return <div className="allocation-row" key={index}><span>{allocation.category as string} · {allocation.amount as string}</span><strong>{proposedName as string}{baselineName ? ` (vs ${baselineName})` : ""}</strong></div>;
-  })}{result.warnings.map((warning) => <p className="muted" key={warning}>{warning}</p>)}</> : <div className="empty-box">Run the optimizer to see a baseline, proposal, delta, and method version.</div>}</div></div>;
+
+  useEffect(() => {
+    if (!scenarioId && scenarios[0]) setScenarioId(scenarios[0].id);
+  }, [scenarios, scenarioId]);
+
+  useEffect(() => {
+    const validOwned = portfolio.map((item) => item.card_variant_id);
+    setSelected((prev) => {
+      const filtered = prev.filter((id) => validOwned.includes(id));
+      return filtered.length > 0 ? filtered : validOwned;
+    });
+  }, [portfolio]);
+
+  return (
+    <div className="optimizer-layout">
+      <div className="panel">
+        <div className="eyebrow">CONSTRAINED ALLOCATION</div>
+        <h2>Optimize existing spend</h2>
+        <p className="muted">
+          Only owned cards in your portfolio are eligible. Total planned spend is preserved per bucket.
+        </p>
+        <label>
+          Scenario
+          <select value={scenarioId} onChange={(event) => setScenarioId(event.target.value)}>
+            {scenarios.map((scenario) => (
+              <option key={scenario.id} value={scenario.id}>
+                {scenario.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <fieldset>
+          <legend>Owned portfolio cards available to optimizer</legend>
+          {ownedCards.length === 0 ? (
+            <p className="muted">
+              You do not have any cards in your portfolio. Please add cards from the Catalogue tab first.
+            </p>
+          ) : (
+            ownedCards.map((card) => (
+              <label className="check-label" key={card.id}>
+                <input
+                  type="checkbox"
+                  checked={selected.includes(card.id)}
+                  onChange={(event) =>
+                    setSelected((items) =>
+                      event.target.checked
+                        ? [...items, card.id]
+                        : items.filter((id) => id !== card.id)
+                    )
+                  }
+                />
+                {card.display_name}
+                <small>Owned card</small>
+              </label>
+            ))
+          )}
+        </fieldset>
+        <button
+          className="primary-button"
+          disabled={!scenarioId || selected.length === 0 || ownedCards.length === 0}
+          onClick={() => onRun(scenarioId, selected)}
+        >
+          Run optimizer <span>↗</span>
+        </button>
+      </div>
+      <div className="panel optimizer-result">
+        {result ? (
+          <>
+            <div className="eyebrow">
+              RESULT · {result.method_version} (Status: {result.plan_status})
+            </div>
+            <h2>Spend preserved, value compared.</h2>
+            <div className="optimizer-metrics">
+              <Metric label="Baseline" value={money(result.baseline_value)} />
+              <Metric label="Proposed" value={money(result.proposed_value)} />
+              <Metric label="Incremental" value={money(result.incremental_value)} />
+            </div>
+            {result.has_cap_uncertainty && result.conservative_proposed_value && (
+              <div className="error-banner" style={{ marginBottom: "1rem" }}>
+                <strong>Uncertainty Notice:</strong> One or more cards have unknown prior cap usage. Conservative proposed reward is {money(result.conservative_proposed_value)} (incremental: {money(result.conservative_incremental_value ?? "0.00")}).
+              </div>
+            )}
+            <div className="success-banner">✓ Total planned spend preserved: {String(result.total_spend_preserved)}</div>
+            {result.allocations.map((allocation, index) => {
+              const proposedName =
+                cards.find((c) => c.id === allocation.proposed_card_variant_id)?.display_name ??
+                allocation.proposed_card_variant_id;
+              const baselineName = allocation.baseline_card_variant_id
+                ? cards.find((c) => c.id === allocation.baseline_card_variant_id)?.display_name ??
+                  allocation.baseline_card_variant_id
+                : null;
+              return (
+                <div className="allocation-row" key={index}>
+                  <span>
+                    {allocation.category as string} · {allocation.amount as string}
+                  </span>
+                  <strong>
+                    {proposedName as string}
+                    {baselineName ? ` (vs ${baselineName})` : ""}
+                  </strong>
+                </div>
+              );
+            })}
+            {result.excluded && result.excluded.length > 0 && (
+              <div style={{ marginTop: "1rem" }}>
+                <h4>Excluded Spend Buckets ({result.excluded.length})</h4>
+                {result.excluded.map((exc, idx) => (
+                  <p key={idx} className="muted" style={{ fontSize: "0.85rem", color: "#c0392b" }}>
+                    • {exc.category}/{exc.channel} (₹{exc.amount}): {exc.reason}
+                  </p>
+                ))}
+              </div>
+            )}
+            {result.warnings.map((warning) => (
+              <p className="muted" key={warning}>
+                {warning}
+              </p>
+            ))}
+          </>
+        ) : (
+          <div className="empty-box">Run the optimizer to see a baseline, proposal, delta, and method version.</div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function Metric({ label, value }: { label: string; value: string }) { return <div className="metric"><span>{label}</span><strong>{value}</strong></div>; }

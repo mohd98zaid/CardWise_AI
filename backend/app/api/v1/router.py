@@ -105,7 +105,7 @@ def list_sources(db: Session = Depends(get_db)) -> list[dict[str, str]]:
             "rights_status": source.rights_status,
             "excerpt": source.excerpt,
         }
-        for source in db.scalars(select(Source)).all()
+        for source in db.scalars(select(Source).where(Source.status == "current")).all()
     ]
 
 
@@ -122,7 +122,12 @@ def list_card_rules(variant_id: str, db: Session = Depends(get_db)) -> list[dict
             "evidence_ids": rule.evidence_ids,
             "notes": rule.notes,
         }
-        for rule in db.scalars(select(Rule).where(Rule.card_variant_id == variant_id)).all()
+        for rule in db.scalars(
+            select(Rule).where(
+                Rule.card_variant_id == variant_id,
+                Rule.review_status.in_(["published", "approved"]),
+            )
+        ).all()
     ]
 
 

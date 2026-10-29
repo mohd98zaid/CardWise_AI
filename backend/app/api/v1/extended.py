@@ -37,7 +37,7 @@ from app.db.models import (
 from app.domain.calculator.engine import calculate_reward
 from app.domain.calculator.models import CalculationInput, CalculationResult
 from app.domain.optimizer import choose_best_cards
-from app.domain.rules.models import CashbackRule, PointsRule
+from app.domain.rules.models import CashbackRule, PointsRule, RuleModel
 from app.domain.rules.resolver import resolve_rule_for_card
 from app.domain.scenarios.models import (
     AllocationInput,
@@ -176,6 +176,7 @@ def update_preferences(
 
 def spend_response(item: ScenarioSpend) -> SpendInput:
     return SpendInput(
+        id=item.id,
         category=item.category,
         channel=item.channel,
         amount=item.amount,
@@ -324,20 +325,35 @@ def duplicate_scenario(
     )
     db.add(duplicate)
     db.flush()
+    old_to_new_spend_id: dict[str, str] = {}
     for item in original.spend:
-        db.add(
-            ScenarioSpend(
-                scenario_id=duplicate.id,
-                category=item.category,
-                channel=item.channel,
-                amount=item.amount,
-                transaction_count=item.transaction_count,
-                is_fixed=item.is_fixed,
-                cap_usage=item.cap_usage,
-                cap_knowledge_state=item.cap_knowledge_state,
-                point_value_per_point=item.point_value_per_point,
-            )
+        new_item = ScenarioSpend(
+            scenario_id=duplicate.id,
+            category=item.category,
+            channel=item.channel,
+            amount=item.amount,
+            transaction_count=item.transaction_count,
+            is_fixed=item.is_fixed,
+            cap_usage=item.cap_usage,
+            cap_knowledge_state=item.cap_knowledge_state,
+            point_value_per_point=item.point_value_per_point,
         )
+        db.add(new_item)
+        db.flush()
+        old_to_new_spend_id[item.id] = new_item.id
+
+    for alloc in original.allocations:
+        if alloc.spend_id in old_to_new_spend_id:
+            db.add(
+                ScenarioAllocation(
+                    scenario_id=duplicate.id,
+                    spend_id=old_to_new_spend_id[alloc.spend_id],
+                    card_variant_id=alloc.card_variant_id,
+                    amount=alloc.amount,
+                    allocation_type=alloc.allocation_type,
+                )
+            )
+
     db.commit()
     db.refresh(duplicate)
     return scenario_response(duplicate)
@@ -628,13 +644,38 @@ def run_optimizer(
         item.card_variant_id
         for item in db.scalars(select(UserCard).where(UserCard.user_id == user.id)).all()
     }
-    requested_ids = [card_id for card_id in request.card_variant_ids if card_id in owned_ids]
-    if not requested_ids:
-        raise HTTPException(status_code=422, detail="Optimizer requires at least one owned card")
+    if not request.card_variant_ids:
+        raise HTTPException(status_code=422, detail="Optimizer requires at least one card variant")
+
+    unowned = [card_id for card_id in request.card_variant_ids if card_id not in owned_ids]
+    if unowned:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Requested card(s) not in user portfolio: {', '.join(unowned)}",
+        )
+
+    requested_ids = request.card_variant_ids
     cards = [
         (card_id, resolve_rule_for_card(card_id, scenario.scenario_date, db))
         for card_id in requested_ids
     ]
+
+    allocations_by_spend = {
+        item.spend_id: item.card_variant_id
+        for item in scenario.allocations
+    }
+
+    # Verify fixed allocations have baseline card mapping
+    for item in scenario.spend:
+        if item.is_fixed and item.id not in allocations_by_spend:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Fixed spending bucket '{item.category}/{item.channel}' (id: {item.id}) "
+                    "requires an assigned baseline card allocation before running the optimizer."
+                ),
+            )
+
     spend = [
         {
             "amount": item.amount,
@@ -645,6 +686,7 @@ def run_optimizer(
             "cap_state": item.cap_knowledge_state,
             "point_value_per_point": item.point_value_per_point,
             "is_fixed": item.is_fixed,
+            "baseline_card": allocations_by_spend.get(item.id),
         }
         for item in scenario.spend
     ]
@@ -827,7 +869,10 @@ def ask_assistant(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
-    result = answer_from_sources(request.question, db.scalars(select(Source)).all())
+    result = answer_from_sources(
+        request.question,
+        db.scalars(select(Source).where(Source.status == "current")).all(),
+    )
     result["user_id"] = user.id
     return result
 
@@ -916,7 +961,7 @@ def create_source(
 
 @admin_router.post("/rules", status_code=201)
 def create_rule(
-    rule: CashbackRule,
+    rule: RuleModel,
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, str]:

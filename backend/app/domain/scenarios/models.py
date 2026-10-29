@@ -50,6 +50,7 @@ class UpdatePreferencesRequest(BaseModel):
 class SpendInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    id: str | None = None
     category: str = Field(min_length=1, max_length=80)
     channel: str = Field(min_length=1, max_length=80)
     amount: Decimal = Field(ge=Decimal("0"))
