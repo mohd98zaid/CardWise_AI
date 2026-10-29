@@ -107,3 +107,14 @@ export type OptimizerResult = {
 };
 
 export type Reminder = { id: string; label: string; due_at: string; timezone: string; status: string };
+
+export type CardRule = {
+  id: string;
+  rule_type: string;
+  parameters: Record<string, unknown>;
+  effective_from: string;
+  effective_to: string | null;
+  verification_status: string;
+  evidence_ids: string[];
+  notes: string;
+};

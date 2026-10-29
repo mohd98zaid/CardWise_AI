@@ -1,13 +1,14 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.ai.assistant import answer_from_sources
 from app.api.deps import get_current_user, require_admin
 from app.core.config import settings
+from app.core.ratelimit import rate_limit_auth
 from app.core.security import (
     hash_password,
     hash_session_token,
@@ -86,10 +87,17 @@ def issue_token(user: User, db: Session) -> AuthResponse:
 
 
 @auth_router.post("/register", response_model=AuthResponse, status_code=201)
-def register(request: RegisterRequest, db: Session = Depends(get_db)) -> AuthResponse:
+def register(
+    request: RegisterRequest,
+    db: Session = Depends(get_db),
+    _rl: None = Depends(rate_limit_auth),
+) -> AuthResponse:
     email = request.email.strip().lower()
     if db.scalar(select(User).where(User.email == email)) is not None:
         raise HTTPException(status_code=409, detail="An account with this email already exists")
+    # SYNTHETIC-MVP-ONLY: Admin role is assigned by hardcoded email.
+    # Replace with a proper provisioning process before any real deployment.
+    # See docs/SECURITY_THREAT_MODEL.md for the risk register entry.
     role = "admin" if email == "admin@cardwise.local" else "user"
     user = User(email=email, password_hash=hash_password(request.password), role=role)
     db.add(user)
@@ -101,7 +109,11 @@ def register(request: RegisterRequest, db: Session = Depends(get_db)) -> AuthRes
 
 
 @auth_router.post("/login", response_model=AuthResponse)
-def login(request: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
+def login(
+    request: LoginRequest,
+    db: Session = Depends(get_db),
+    _rl: None = Depends(rate_limit_auth),
+) -> AuthResponse:
     user = db.scalar(select(User).where(User.email == request.email.strip().lower()))
     if user is None or not verify_password(request.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -191,10 +203,17 @@ def owned_scenario(scenario_id: str, user: User, db: Session) -> Scenario:
 
 @private_router.get("/me/scenarios", response_model=list[ScenarioResponse])
 def list_scenarios(
-    user: User = Depends(get_current_user), db: Session = Depends(get_db)
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> list[ScenarioResponse]:
     scenarios = db.scalars(
-        select(Scenario).where(Scenario.user_id == user.id).order_by(Scenario.updated_at.desc())
+        select(Scenario)
+        .where(Scenario.user_id == user.id)
+        .order_by(Scenario.updated_at.desc())
+        .offset(offset)
+        .limit(limit)
     ).all()
     return [scenario_response(item) for item in scenarios]
 
@@ -727,9 +746,31 @@ def create_export(
     user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> dict[str, object]:
     scenarios = db.scalars(select(Scenario).where(Scenario.user_id == user.id)).all()
+    portfolio_rows = db.execute(
+        select(UserCard, CardVariant)
+        .join(CardVariant, CardVariant.id == UserCard.card_variant_id)
+        .where(UserCard.user_id == user.id)
+    ).all()
+    reminders_rows = db.scalars(
+        select(Reminder).where(Reminder.user_id == user.id)
+    ).all()
     payload = {
-        "user": {"email": user.email, "timezone": user.timezone},
+        "schema_version": 1,
+        "user": {"id": user.id, "email": user.email, "timezone": user.timezone,
+                 "preferred_currency": user.preferred_currency, "role": user.role},
+        "portfolio": [
+            {"card_variant_id": uc.card_variant_id, "nickname": uc.nickname, "status": uc.status,
+             "display_name": cv.display_name}
+            for uc, cv in portfolio_rows
+        ],
         "scenarios": [scenario_response(item).model_dump(mode="json") for item in scenarios],
+        "reminders": [
+            {"id": r.id, "label": r.label, "due_at": r.due_at.isoformat(),
+             "timezone": r.timezone, "status": r.status}
+            for r in reminders_rows
+        ],
+        "exported_at": datetime.now(UTC).isoformat(),
+        "note": "This export contains user-owned records from the CardWise local database only.",
     }
     job = ExportJob(
         user_id=user.id, expires_at=session_expiry(settings.export_expiry_hours), payload=payload

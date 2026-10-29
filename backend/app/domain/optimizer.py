@@ -45,7 +45,10 @@ def choose_best_cards(
                 ),
                 rule,
             )
-            if result.estimated_net_value is not None:
+            if (
+                result.status not in {"excluded", "cannot_calculate"}
+                and result.estimated_net_value is not None
+            ):
                 candidates.append(AllocationCandidate(card_id, result.estimated_net_value))
         if not candidates:
             excluded.append(
@@ -87,8 +90,9 @@ def choose_best_cards(
         "excluded": excluded,
         "warnings": [
             (
-                "Synthetic local optimizer: allocation is enumerated per bucket and does not "
-                "model shared caps across buckets."
+                "Optimizer models each spending bucket independently. Shared monthly caps across "
+                "multiple buckets are not tracked. If your card has a monthly reward cap, actual "
+                "achievable reward may be lower than shown."
             )
         ],
     }

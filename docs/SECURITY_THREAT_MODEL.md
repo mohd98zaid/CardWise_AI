@@ -20,3 +20,12 @@ Threat model review, authorization tests, clean secret scan, dependency scan, CO
 
 ## Incident handling
 For incorrect rules, calculation bugs, data access, leaked secrets, compromised admin, source complaints, or AI unsupported claims: contain, preserve evidence, assess impact, correct, notify as legally required, and record prevention work.
+
+## Risk Register
+
+### RISK-001: Hardcoded admin email for role assignment
+- **Severity**: High
+- **Location**: `backend/app/api/v1/extended.py` — `register` endpoint
+- **Description**: Admin role is granted to the account whose email matches the hardcoded string `admin@cardwise.local`. Any attacker who registers with that email gains full admin access.
+- **Status**: SYNTHETIC-MVP-ONLY — acceptable for local development only.
+- **Mitigation required before production**: Replace with a proper admin provisioning process (e.g., CLI seeding, environment-variable controlled seed email, or an invite-based flow with a separate secrets-managed admin password).

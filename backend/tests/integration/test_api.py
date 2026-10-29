@@ -2,10 +2,12 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from app.core.ratelimit import reset_rate_limits
 from app.main import app
 
 
 def authenticated_client(email: str | None = None) -> tuple[TestClient, dict[str, str]]:
+    reset_rate_limits()
     client = TestClient(app)
     address = email or f"{uuid4().hex}@example.com"
     response = client.post(
@@ -164,3 +166,92 @@ def test_points_estimate_requires_or_uses_explicit_valuation() -> None:
     )
     assert valued.status_code == 200
     assert valued.json()["estimated_net_value"] == "5.00"
+
+
+def test_logout_invalidates_token() -> None:
+    client, headers = authenticated_client()
+    me_resp = client.get("/api/v1/me", headers=headers)
+    assert me_resp.status_code == 200
+
+    logout_resp = client.post("/api/v1/auth/logout", headers=headers)
+    assert logout_resp.status_code == 204
+
+    after_resp = client.get("/api/v1/me", headers=headers)
+    assert after_resp.status_code == 401
+
+
+def test_cross_user_calculation_isolation() -> None:
+    user_a, headers_a = authenticated_client()
+    user_b, headers_b = authenticated_client()
+
+    scenario = user_a.post(
+        "/api/v1/me/scenarios",
+        headers=headers_a,
+        json={
+            "name": "Secret Plan",
+            "scenario_date": "2026-01-15",
+            "currency": "INR",
+            "spend": [
+                {
+                    "category": "online_shopping",
+                    "channel": "online_card",
+                    "amount": "5000.00",
+                    "cap_knowledge_state": "known",
+                    "cap_usage": "0.00",
+                }
+            ],
+        },
+    )
+    assert scenario.status_code == 201
+    calc = user_a.post(
+        f"/api/v1/scenarios/{scenario.json()['id']}/calculate",
+        headers=headers_a,
+        json={"card_variant_ids": ["synthetic-variant"]},
+    )
+    assert calc.status_code == 200
+    calc_run_id = calc.json()["calculation_run_id"]
+
+    # User B attempts to access calculation run and trace of User A
+    leak_calc = user_b.get(f"/api/v1/calculations/{calc_run_id}", headers=headers_b)
+    assert leak_calc.status_code == 404
+
+    leak_trace = user_b.get(f"/api/v1/calculations/{calc_run_id}/trace", headers=headers_b)
+    assert leak_trace.status_code == 404
+
+
+def test_cross_user_export_isolation() -> None:
+    user_a, headers_a = authenticated_client()
+    user_b, headers_b = authenticated_client()
+
+    export_res = user_a.post("/api/v1/exports", headers=headers_a)
+    assert export_res.status_code == 201
+    export_id = export_res.json()["id"]
+
+    # User B attempts to fetch User A's export
+    leak = user_b.get(f"/api/v1/exports/{export_id}", headers=headers_b)
+    assert leak.status_code == 404
+
+
+def test_user_account_deletion_cleans_up() -> None:
+    client, headers = authenticated_client()
+    me_resp = client.get("/api/v1/me", headers=headers)
+    assert me_resp.status_code == 200
+
+    del_resp = client.delete("/api/v1/me", headers=headers)
+    assert del_resp.status_code == 204
+
+    # Deleted account's token should no longer work
+    check = client.get("/api/v1/me", headers=headers)
+    assert check.status_code == 401
+
+
+def test_health_and_readiness_endpoints() -> None:
+    client = TestClient(app)
+    health_resp = client.get("/health")
+    assert health_resp.status_code == 200
+    assert health_resp.json()["status"] == "ok"
+
+    ready_resp = client.get("/ready")
+    assert ready_resp.status_code == 200
+    assert ready_resp.json()["status"] == "ready"
+    assert ready_resp.json()["database"] == "connected"

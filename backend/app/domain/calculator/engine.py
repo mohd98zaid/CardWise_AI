@@ -13,7 +13,7 @@ def _money(value: Decimal) -> Decimal:
     return value.quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
 
 
-def _manifest_hash(rule: CashbackRule) -> str:
+def _manifest_hash(rule: CashbackRule | PointsRule) -> str:
     payload = json.dumps(rule.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 

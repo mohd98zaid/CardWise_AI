@@ -1,5 +1,6 @@
 import type {
   AuthResponse,
+  CardRule,
   CardVariant,
   CalculationRequest,
   CalculationResult,
@@ -102,4 +103,12 @@ export function estimateRewards(payload: CalculationRequest): Promise<Calculatio
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function getCardRules(variantId: string): Promise<CardRule[]> {
+  return request<CardRule[]>(`/api/v1/card-variants/${variantId}/rules`);
+}
+
+export function deleteReminder(token: string, reminderId: string): Promise<void> {
+  return request<void>(`/api/v1/reminders/${reminderId}`, { method: "DELETE" }, token);
 }

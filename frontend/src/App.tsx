@@ -7,7 +7,9 @@ import {
   createReminder,
   createScenario,
   deleteAccount,
+  deleteReminder,
   duplicateScenario,
+  getCardRules,
   getCards,
   getMe,
   getPortfolio,
@@ -19,7 +21,7 @@ import {
   removePortfolioCard,
   runOptimizer,
 } from "./api";
-import type { AuthResponse, CardVariant, Comparison, OptimizerResult, Reminder, Scenario, SpendInput, User } from "./types";
+import type { AuthResponse, CardRule, CardVariant, Comparison, OptimizerResult, Reminder, Scenario, SpendInput, User } from "./types";
 
 const currency = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 });
 const money = (value: string | number | null | undefined) => value === null || value === undefined ? "—" : currency.format(Number(value));
@@ -121,7 +123,7 @@ function Workspace({ token, user, onLogout }: { token: string; user: User; onLog
         {tab === "scenarios" && <Scenarios cards={cards} scenarios={scenarios} comparison={comparison} onSave={saveScenario} onDuplicate={async (id) => { const copy = await duplicateScenario(token, id); setScenarios((items) => [copy, ...items]); setNotice("Scenario duplicated."); }} onCompare={compare} onOptimize={(id) => optimize(id, portfolio.map((item) => item.card_variant_id))} />}
         {tab === "optimizer" && <Optimizer scenarios={scenarios} cards={cards} portfolio={portfolio} result={optimizer} onRun={optimize} />}
         {tab === "assistant" && <Assistant token={token} />}
-        {tab === "settings" && <Settings token={token} reminders={reminders} onReminder={async (label, dueAt) => { const reminder = await createReminder(token, label, dueAt); setReminders((items) => [...items, reminder]); setNotice("Reminder saved."); }} onExport={async () => { const exportFile = await createExport(token); setNotice(`Export ${exportFile.id} created and expires at ${new Date(exportFile.expires_at).toLocaleString()}.`); }} onDelete={async () => { await deleteAccount(token); onLogout(); }} />}
+        {tab === "settings" && <Settings token={token} reminders={reminders} onReminder={async (label, dueAt) => { const reminder = await createReminder(token, label, dueAt); setReminders((items) => [...items, reminder]); setNotice("Reminder saved."); }} onExport={async () => { const exportFile = await createExport(token); setNotice(`Export created — expires ${new Date(exportFile.expires_at).toLocaleString()}. Contains: your account data, scenarios, and reminders. Export ID: ${exportFile.id}`); }} onDeleteReminder={async (id) => { await deleteReminder(token, id); setReminders((items) => items.filter((r) => r.id !== id)); }} onDelete={async () => { await deleteAccount(token); onLogout(); }} />}
       </section>
     </div>
     <footer><span>CardWise AI · Estimates, not guarantees</span><span>Calculator engine 0.1.0</span></footer>
@@ -133,7 +135,83 @@ function Dashboard({ cards, scenarios, reminders, onNavigate }: { cards: CardVar
 }
 
 function Catalogue({ cards, onAdd }: { cards: CardVariant[]; onAdd: (id: string) => void }) {
-  return <div className="catalogue-grid">{cards.map((card) => <article className="panel catalogue-card" key={card.id}><div className="card-art"><span>cw</span><small>{card.network}</small></div><div className="card-kicker">{card.issuer_name} · {card.market}</div><h2>{card.display_name}</h2><p>{card.description}</p><div className="tag-row"><span className="tag synthetic">Synthetic</span><span className="tag">From {card.valid_from}</span></div><button className="secondary-button" onClick={() => onAdd(card.id)}>Add card reference</button></article>)}</div>;
+  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
+  const [rules, setRules] = useState<CardRule[]>([]);
+  const [loadingRules, setLoadingRules] = useState(false);
+
+  async function handleSelectCard(cardId: string) {
+    if (selectedCardId === cardId) {
+      setSelectedCardId(null);
+      setRules([]);
+      return;
+    }
+    setSelectedCardId(cardId);
+    setLoadingRules(true);
+    try {
+      const data = await getCardRules(cardId);
+      setRules(data);
+    } catch {
+      setRules([]);
+    } finally {
+      setLoadingRules(false);
+    }
+  }
+
+  return (
+    <div className="catalogue-grid">
+      {cards.map((card) => (
+        <article className="panel catalogue-card" key={card.id}>
+          <div className="card-art">
+            <span>cw</span>
+            <small>{card.network}</small>
+          </div>
+          <div className="card-kicker">{card.issuer_name} · {card.market}</div>
+          <h2>{card.display_name}</h2>
+          <p>{card.description}</p>
+          <div className="tag-row">
+            <span className="tag synthetic">{card.verification_status}</span>
+            <span className="tag">From {card.valid_from}</span>
+          </div>
+          <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
+            <button className="secondary-button" onClick={() => onAdd(card.id)}>
+              Add card reference
+            </button>
+            <button className="text-button" onClick={() => handleSelectCard(card.id)}>
+              {selectedCardId === card.id ? "Hide rules ▲" : "View rules ▼"}
+            </button>
+          </div>
+          {selectedCardId === card.id && (
+            <div className="card-detail-box" style={{ marginTop: "1rem", padding: "0.75rem", background: "var(--color-bg-subtle, #f8f9fa)", borderRadius: "4px" }}>
+              <h4 style={{ margin: "0 0 0.5rem" }}>Card Rules & Verification</h4>
+              {loadingRules ? (
+                <p className="muted">Loading rules...</p>
+              ) : rules.length === 0 ? (
+                <p className="muted">No rules currently listed for this variant.</p>
+              ) : (
+                rules.map((rule) => (
+                  <div key={rule.id} style={{ marginBottom: "0.5rem", borderBottom: "1px solid #eee", paddingBottom: "0.5rem" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <strong>{rule.rule_type.replace("_", " ")}</strong>
+                      <span className={`tag ${rule.verification_status}`}>{rule.verification_status}</span>
+                    </div>
+                    <small>Effective: {rule.effective_from} {rule.effective_to ? `to ${rule.effective_to}` : "onwards"}</small>
+                    <pre style={{ fontSize: "0.8rem", overflowX: "auto" }}>{JSON.stringify(rule.parameters, null, 2)}</pre>
+                    {rule.notes && <p style={{ fontSize: "0.85rem", fontStyle: "italic", margin: "0.25rem 0" }}>{rule.notes}</p>}
+                    {rule.evidence_ids.length > 0 && (
+                      <small className="muted">Evidence IDs: {rule.evidence_ids.join(", ")}</small>
+                    )}
+                  </div>
+                ))
+              )}
+              <small className="muted" style={{ display: "block", marginTop: "0.5rem" }}>
+                ⚠️ Fictional / synthetic rule fixture for local alpha only.
+              </small>
+            </div>
+          )}
+        </article>
+      ))}
+    </div>
+  );
 }
 
 function Portfolio({ cards, portfolio, onRemove }: { cards: CardVariant[]; portfolio: Array<{ id?: string; card_variant_id: string; display_name: string; nickname?: string | null }>; onRemove: (id: string) => void }) {
@@ -153,7 +231,11 @@ function Optimizer({ scenarios, cards, portfolio, result, onRun }: { scenarios: 
   const [scenarioId, setScenarioId] = useState(scenarios[0]?.id ?? "");
   const [selected, setSelected] = useState<string[]>(portfolio.map((item) => item.card_variant_id));
   useEffect(() => { if (!scenarioId && scenarios[0]) setScenarioId(scenarios[0].id); }, [scenarios, scenarioId]);
-  return <div className="optimizer-layout"><div className="panel"><div className="eyebrow">CONSTRAINED ALLOCATION</div><h2>Optimize existing spend</h2><p className="muted">Only selected card references are eligible. Total planned spend is preserved per bucket.</p><label>Scenario<select value={scenarioId} onChange={(event) => setScenarioId(event.target.value)}>{scenarios.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name}</option>)}</select></label><fieldset><legend>Cards available to optimizer</legend>{cards.map((card) => <label className="check-label" key={card.id}><input type="checkbox" checked={selected.includes(card.id)} onChange={(event) => setSelected((items) => event.target.checked ? [...items, card.id] : items.filter((id) => id !== card.id))} />{card.display_name}<small>{portfolio.some((item) => item.card_variant_id === card.id) ? "Owned reference" : "Will be added as a local reference"}</small></label>)}</fieldset><button className="primary-button" disabled={!scenarioId || selected.length === 0} onClick={() => onRun(scenarioId, selected)}>Run optimizer <span>↗</span></button></div><div className="panel optimizer-result">{result ? <><div className="eyebrow">RESULT · {result.method_version}</div><h2>Spend preserved, value compared.</h2><div className="optimizer-metrics"><Metric label="Baseline" value={money(result.baseline_value)} /><Metric label="Proposed" value={money(result.proposed_value)} /><Metric label="Incremental" value={money(result.incremental_value)} /></div><div className="success-banner">✓ Total planned spend preserved: {String(result.total_spend_preserved)}</div>{result.allocations.map((allocation, index) => <div className="allocation-row" key={index}><span>{allocation.category as string} · {allocation.amount as string}</span><strong>{allocation.proposed_card_variant_id as string}</strong></div>)}{result.warnings.map((warning) => <p className="muted" key={warning}>{warning}</p>)}</> : <div className="empty-box">Run the optimizer to see a baseline, proposal, delta, and method version.</div>}</div></div>;
+  return <div className="optimizer-layout"><div className="panel"><div className="eyebrow">CONSTRAINED ALLOCATION</div><h2>Optimize existing spend</h2><p className="muted">Only selected card references are eligible. Total planned spend is preserved per bucket.</p><label>Scenario<select value={scenarioId} onChange={(event) => setScenarioId(event.target.value)}>{scenarios.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name}</option>)}</select></label><fieldset><legend>Cards available to optimizer</legend>{cards.map((card) => <label className="check-label" key={card.id}><input type="checkbox" checked={selected.includes(card.id)} onChange={(event) => setSelected((items) => event.target.checked ? [...items, card.id] : items.filter((id) => id !== card.id))} />{card.display_name}<small>{portfolio.some((item) => item.card_variant_id === card.id) ? "Owned reference" : "Will be added as a local reference"}</small></label>)}</fieldset><button className="primary-button" disabled={!scenarioId || selected.length === 0} onClick={() => onRun(scenarioId, selected)}>Run optimizer <span>↗</span></button></div><div className="panel optimizer-result">{result ? <><div className="eyebrow">RESULT · {result.method_version}</div><h2>Spend preserved, value compared.</h2><div className="optimizer-metrics"><Metric label="Baseline" value={money(result.baseline_value)} /><Metric label="Proposed" value={money(result.proposed_value)} /><Metric label="Incremental" value={money(result.incremental_value)} /></div><div className="success-banner">✓ Total planned spend preserved: {String(result.total_spend_preserved)}</div>{result.allocations.map((allocation, index) => {
+    const proposedName = cards.find((c) => c.id === allocation.proposed_card_variant_id)?.display_name ?? allocation.proposed_card_variant_id;
+    const baselineName = allocation.baseline_card_variant_id ? (cards.find((c) => c.id === allocation.baseline_card_variant_id)?.display_name ?? allocation.baseline_card_variant_id) : null;
+    return <div className="allocation-row" key={index}><span>{allocation.category as string} · {allocation.amount as string}</span><strong>{proposedName as string}{baselineName ? ` (vs ${baselineName})` : ""}</strong></div>;
+  })}{result.warnings.map((warning) => <p className="muted" key={warning}>{warning}</p>)}</> : <div className="empty-box">Run the optimizer to see a baseline, proposal, delta, and method version.</div>}</div></div>;
 }
 
 function Metric({ label, value }: { label: string; value: string }) { return <div className="metric"><span>{label}</span><strong>{value}</strong></div>; }
@@ -164,9 +246,9 @@ function Assistant({ token }: { token: string }) {
   return <div className="assistant-layout"><div className="panel assistant-panel"><div className="eyebrow">TERMS ASSISTANT</div><h2>Ask, but keep evidence in charge.</h2><p className="muted">The assistant is intentionally abstaining in the synthetic MVP until permitted, verified sources and an evaluation set are configured.</p><form onSubmit={ask}><label>Your question<textarea value={question} onChange={(event) => setQuestion(event.target.value)} rows={5} /></label><button className="primary-button" disabled={loading}>{loading ? "Checking sources…" : "Ask assistant"}<span>↗</span></button></form>{answer && <div className="abstain-box"><strong>Abstained</strong><p>{answer}</p><span>No citations available</span></div>}</div></div>;
 }
 
-function Settings({ token, reminders, onReminder, onExport, onDelete }: { token: string; reminders: Reminder[]; onReminder: (label: string, dueAt: string) => void; onExport: () => void; onDelete: () => void }) {
+function Settings({ token, reminders, onReminder, onExport, onDeleteReminder, onDelete }: { token: string; reminders: Reminder[]; onReminder: (label: string, dueAt: string) => void; onExport: () => void; onDeleteReminder: (id: string) => void; onDelete: () => void }) {
   const [label, setLabel] = useState(""); const [dueAt, setDueAt] = useState("");
-  return <div className="settings-grid"><div className="panel"><div className="eyebrow">REMINDERS</div><h2>Keep your own dates</h2><p className="muted">Reminders are informational and do not imply an issuer deadline.</p><form onSubmit={(event) => { event.preventDefault(); onReminder(label, new Date(dueAt).toISOString()); setLabel(""); setDueAt(""); }}><label>Label<input value={label} onChange={(event) => setLabel(event.target.value)} required placeholder="Review annual fee terms" /></label><label>Due date<input type="datetime-local" value={dueAt} onChange={(event) => setDueAt(event.target.value)} required /></label><button className="secondary-button" type="submit">Save reminder</button></form>{reminders.map((reminder) => <div className="reminder-row" key={reminder.id}><span>{reminder.label}</span><small>{new Date(reminder.due_at).toLocaleString()}</small></div>)}</div><div className="panel"><div className="eyebrow">PRIVACY CONTROLS</div><h2>Your data, your controls.</h2><p className="muted">Exports expire automatically. Account deletion removes user-owned records from the local database. Backups are not configured in this synthetic track.</p><button className="secondary-button" onClick={onExport}>Create expiring export</button><button className="danger-button" onClick={() => { if (window.confirm("Delete this local workspace?")) onDelete(); }}>Delete workspace</button><div className="privacy-list"><span>✓ No full card number stored</span><span>✓ No issuer credentials collected</span><span>✓ Assistant does not send data to a model</span></div></div></div>;
+  return <div className="settings-grid"><div className="panel"><div className="eyebrow">REMINDERS</div><h2>Keep your own dates</h2><p className="muted">Reminders are informational and do not imply an issuer deadline.</p><form onSubmit={(event) => { event.preventDefault(); onReminder(label, new Date(dueAt).toISOString()); setLabel(""); setDueAt(""); }}><label>Label<input value={label} onChange={(event) => setLabel(event.target.value)} required placeholder="Review annual fee terms" /></label><label>Due date<input type="datetime-local" value={dueAt} onChange={(event) => setDueAt(event.target.value)} required /></label><button className="secondary-button" type="submit">Save reminder</button></form>{reminders.map((reminder) => <div className="reminder-row" key={reminder.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><div><span>{reminder.label}</span><br /><small>{new Date(reminder.due_at).toLocaleString()}</small></div><button className="danger-button" style={{ padding: "0.2rem 0.5rem", fontSize: "0.8rem" }} title="Delete reminder" onClick={() => onDeleteReminder(reminder.id)}>✕</button></div>)}</div><div className="panel"><div className="eyebrow">PRIVACY CONTROLS</div><h2>Your data, your controls.</h2><p className="muted">Exports expire automatically. Account deletion removes user-owned records from the local database. Backups are not configured in this synthetic track.</p><button className="secondary-button" onClick={onExport}>Create expiring export</button><button className="danger-button" onClick={() => { if (window.confirm("Delete this local workspace?")) onDelete(); }}>Delete workspace</button><div className="privacy-list"><span>✓ No full card number stored</span><span>✓ No issuer credentials collected</span><span>✓ Assistant does not send data to a model</span></div></div></div>;
 }
 
 export default App;

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
@@ -18,6 +18,10 @@ router = APIRouter(prefix="/api/v1")
 @router.get("/catalogue/cards", response_model=list[CardVariantResponse])
 def list_cards(
     search: str | None = Query(default=None, min_length=1),
+    network: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ) -> list[CardVariantResponse]:
     rows = db.execute(
@@ -39,17 +43,21 @@ def list_cards(
         )
         for row, issuer in rows
     ]
-    if not search:
-        return cards
-    normalized = search.casefold()
-    return [
-        card
-        for card in cards
-        if normalized
-        in " ".join(
-            [card.issuer_name, card.product_family, card.display_name, card.network]
-        ).casefold()
-    ]
+    if network:
+        cards = [c for c in cards if c.network.casefold() == network.casefold()]
+    if status:
+        cards = [c for c in cards if c.status == status]
+    if search:
+        normalized = search.casefold()
+        cards = [
+            card
+            for card in cards
+            if normalized
+            in " ".join(
+                [card.issuer_name, card.product_family, card.display_name, card.network]
+            ).casefold()
+        ]
+    return cards[offset : offset + limit]
 
 
 @router.get("/catalogue/cards/{variant_id}", response_model=CardVariantResponse)
@@ -118,10 +126,20 @@ def list_card_rules(variant_id: str, db: Session = Depends(get_db)) -> list[dict
 
 @router.post("/calculations/estimate", response_model=CalculationResult)
 def estimate(request: CalculationInput, db: Session = Depends(get_db)) -> CalculationResult:
-    row = db.scalar(select(Rule).where(Rule.card_variant_id == request.card_variant_id))
+    row = db.scalar(
+        select(Rule)
+        .where(
+            and_(
+                Rule.card_variant_id == request.card_variant_id,
+                Rule.effective_from <= request.scenario_date,
+                or_(Rule.effective_to.is_(None), Rule.effective_to >= request.scenario_date),
+            )
+        )
+        .order_by(Rule.effective_from.desc())
+    )
     if row is None:
         raise HTTPException(
-            status_code=404, detail="No synthetic rule exists for this card variant"
+            status_code=404, detail="No active rule for this card on the requested date"
         )
     rule_data = {
         "schema_version": row.schema_version,
