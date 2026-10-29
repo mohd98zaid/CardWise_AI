@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: cardwise
       POSTGRES_PASSWORD: cardwise_local_only
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - cardwise-postgres:/var/lib/postgresql/data
     healthcheck:
@@ -21,9 +21,9 @@ services:
       dockerfile: backend/Dockerfile
     environment:
       DATABASE_URL: postgresql+psycopg://cardwise:cardwise_local_only@postgres:5432/cardwise
-      ALLOWED_ORIGINS: http://localhost:5173
+      ALLOWED_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -33,7 +33,7 @@ services:
       context: frontend
       dockerfile: Dockerfile
     ports:
-      - "5173:80"
+      - "127.0.0.1:5173:80"
     depends_on:
       - backend
 

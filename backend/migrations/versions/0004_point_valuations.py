@@ -10,10 +10,20 @@ depends_on = None
 
 
 def upgrade() -> None:
-    with op.batch_alter_table("scenario_spend") as batch_op:
-        batch_op.add_column(sa.Column("point_value_per_point", sa.Numeric(18, 4), nullable=True))
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    cols = [c["name"] for c in insp.get_columns("scenario_spend")]
+    if "point_value_per_point" not in cols:
+        with op.batch_alter_table("scenario_spend") as batch_op:
+            batch_op.add_column(
+                sa.Column("point_value_per_point", sa.Numeric(18, 4), nullable=True)
+            )
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("scenario_spend") as batch_op:
-        batch_op.drop_column("point_value_per_point")
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    cols = [c["name"] for c in insp.get_columns("scenario_spend")]
+    if "point_value_per_point" in cols:
+        with op.batch_alter_table("scenario_spend") as batch_op:
+            batch_op.drop_column("point_value_per_point")

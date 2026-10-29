@@ -6,6 +6,8 @@ This document describes all environment variables used across CardWise AI backen
 
 | Variable | Description | Required | Default | Service | Sensitive |
 |---|---|---|---|---|---|
+| `HOST` | Bind host address (defaults to local loopback) | No | `127.0.0.1` | Backend | No |
+| `PORT` | Bind port number | No | `8000` | Backend | No |
 | `APP_ENV` | Application environment (`development`, `test`, `production`) | No | `development` | Backend | No |
 | `DATABASE_URL` | SQLAlchemy connection string (SQLite for dev, PostgreSQL for production) | No | `sqlite:///./cardwise.db` | Backend | Yes (prod) |
 | `ALLOWED_ORIGINS` | Comma-separated CORS allowed browser origins | No | `http://localhost:5173,http://127.0.0.1:5173` | Backend | No |

@@ -11,6 +11,8 @@ class ConfigurationError(ValueError):
 class Settings:
     app_env: str = os.getenv("APP_ENV", "development")
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./cardwise.db")
+    host: str = os.getenv("HOST", "127.0.0.1")
+    port: int = int(os.getenv("PORT", "8000"))
     session_ttl_hours: int = int(os.getenv("SESSION_TTL_HOURS", "24"))
     export_expiry_hours: int = int(os.getenv("EXPORT_EXPIRY_HOURS", "24"))
     enable_assistant: bool = os.getenv("ENABLE_ASSISTANT", "false").lower() == "true"
