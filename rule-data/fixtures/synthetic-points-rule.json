@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "rule_id": "synthetic-travel-points-v1",
+  "card_variant_id": "synthetic-points-variant",
+  "rule_type": "points_rate",
+  "parameters": {
+    "points_per_100": "2.0",
+    "point_value": null,
+    "eligible_categories": ["travel"],
+    "eligible_channels": ["online_card"]
+  },
+  "effective_from": "2026-01-01",
+  "effective_to": null,
+  "verification_status": "draft",
+  "evidence_ids": ["synthetic-points-source"],
+  "notes": "Fictional points fixture; point value must be supplied as a user assumption."
+}

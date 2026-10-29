@@ -1,0 +1,1 @@
+Run `alembic upgrade head` from the backend directory. The application bootstrap also creates the local schema for convenience.

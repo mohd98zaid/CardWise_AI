@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cardwise.local/schemas/cashback-rule-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "rule_id", "card_variant_id", "rule_type", "parameters", "effective_from", "verification_status"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "rule_id": {"type": "string", "minLength": 1},
+    "card_variant_id": {"type": "string", "minLength": 1},
+    "rule_type": {"enum": ["cashback_rate", "points_rate"]},
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eligible_categories", "eligible_channels"],
+      "properties": {
+        "rate_percent": {"type": ["string", "null"]},
+        "points_per_100": {"type": ["string", "null"]},
+        "cap_amount": {"type": ["string", "null"]},
+        "cap_period": {"type": ["string", "null"], "enum": ["calendar_month", null]},
+        "eligible_categories": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "eligible_channels": {"type": "array", "items": {"type": "string"}, "minItems": 1}
+      }
+    },
+    "effective_from": {"type": "string", "format": "date"},
+    "effective_to": {"type": ["string", "null"], "format": "date"},
+    "verification_status": {"enum": ["draft", "in_review", "verified", "needs_review", "superseded", "expired"]},
+    "evidence_ids": {"type": "array", "items": {"type": "string"}},
+    "notes": {"type": "string"}
+  }
+}
