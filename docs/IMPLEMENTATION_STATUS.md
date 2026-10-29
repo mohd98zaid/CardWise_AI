@@ -10,7 +10,7 @@ The selected track is **Synthetic local MVP**. This status describes the impleme
 | 1 Catalogue/rules/evidence | Complete for synthetic catalogue | Database-backed exact variants, synthetic cashback and points rules, source records, excerpts, rule tests, admin review/publish gates, audit events, validation scripts | Real issuer research, source rights, independent real-world reviewers |
 | 2 Scenarios | Complete for local MVP | Authenticated scenario CRUD, duplication, spend buckets, taxonomy endpoints, allocations, point valuation assumptions, revisions, ownership isolation, portfolio CRUD | Richer multi-row editor polish and external imports |
 | 3 Calculator | Complete for supported synthetic rules | Decimal cashback and points, explicit point valuation, eligibility, exclusions, effective dates, caps, unknown cap ranges, traces, manifests, persisted runs, comparison | Fees, milestones, reversals, multiple currencies, all real issuer rule combinations |
-| 4 Optimizer | Complete for bounded synthetic subset | Existing-card constraint, per-bucket enumeration, cashback/points dispatch, total-spend checks, baseline/proposal/delta, method version, infeasibility output | Shared caps, thresholds, complex solver, sensitivity analysis |
+| 4 Optimizer | Complete for bounded synthetic subset | Existing-card constraint, shared monthly cap tracking across all buckets, fixed allocation preservation, total-spend checks, baseline/proposal/delta, method version, infeasibility/partial allocation output | Complex multi-period MILP solver, real-time issuer milestone trackers |
 | 5 Assistant | Complete as safe local fallback | Lexical evidence lookup, citation-shaped response, abstention, no rule publishing, no model dependency | LLM provider, full ingestion pipeline, semantic retrieval, evaluation dataset |
 | 6 Privacy/operations | Complete for local MVP | Argon2 passwords, sessions, ownership checks, export expiry, account deletion, reminders, logs/request IDs, security headers, health checks, persisted traces | Production retention enforcement, encrypted backups, external alerting, legal review |
 | 7 Verified pilot/release | Pending by design | Release documentation, Docker Compose, CI gates, synthetic release track | Real launch cards, source verification, pilot, production hosting, security/accessibility/load sign-off |
@@ -33,9 +33,16 @@ Or start PostgreSQL plus the containerized services from the repository root:
 docker compose up --build
 ```
 
-## Local admin account
+## Local admin provisioning
 
-Registering `admin@cardwise.local` assigns the local `admin` role. This convention is for the synthetic local MVP only and must be replaced by a real identity/role provisioning process before deployment.
+Public registration endpoints unconditionally create standard accounts (`role: "user"`). To provision an administrator account:
+
+```bash
+# Provision out-of-band via trusted CLI
+python scripts/provision_admin.py --email admin@cardwise.local --password "SecureAdminPass123!" --role admin
+```
+
+Alternatively, configure `INITIAL_ADMIN_EMAIL` and `INITIAL_ADMIN_PASSWORD` in your local environment file prior to starting the service. Every administrative provisioning action is permanently logged to `audit_events`.
 
 ## Important boundary
 

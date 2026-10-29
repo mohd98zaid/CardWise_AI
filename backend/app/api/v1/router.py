@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
@@ -8,7 +8,7 @@ from app.db.models import Issuer, Rule, Source
 from app.domain.calculator.engine import calculate_reward
 from app.domain.calculator.models import CalculationInput, CalculationResult
 from app.domain.catalogue import CardVariant as CardVariantResponse
-from app.domain.rules.models import CashbackRule, PointsRule
+from app.domain.rules.resolver import resolve_rule_for_card
 from app.domain.scenarios.models import TaxonomyItem
 from app.domain.taxonomy import CATEGORIES, CHANNELS
 
@@ -24,10 +24,27 @@ def list_cards(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ) -> list[CardVariantResponse]:
-    rows = db.execute(
-        select(CardVariantRow, Issuer).join(Issuer, Issuer.id == CardVariantRow.issuer_id)
-    ).all()
-    cards = [
+    """List catalogue card variants with database-level search, filtering, and pagination."""
+    query = select(CardVariantRow, Issuer).join(Issuer, Issuer.id == CardVariantRow.issuer_id)
+    if network:
+        query = query.where(CardVariantRow.network.ilike(network.strip()))
+    if status:
+        query = query.where(CardVariantRow.status == status.strip())
+    if search:
+        pattern = f"%{search.strip()}%"
+        query = query.where(
+            or_(
+                Issuer.name.ilike(pattern),
+                CardVariantRow.product_family.ilike(pattern),
+                CardVariantRow.display_name.ilike(pattern),
+                CardVariantRow.network.ilike(pattern),
+            )
+        )
+    query = query.order_by(CardVariantRow.display_name.asc(), CardVariantRow.id.asc())
+    query = query.offset(offset).limit(limit)
+
+    rows = db.execute(query).all()
+    return [
         CardVariantResponse(
             id=row.id,
             issuer_name=issuer.name,
@@ -43,21 +60,6 @@ def list_cards(
         )
         for row, issuer in rows
     ]
-    if network:
-        cards = [c for c in cards if c.network.casefold() == network.casefold()]
-    if status:
-        cards = [c for c in cards if c.status == status]
-    if search:
-        normalized = search.casefold()
-        cards = [
-            card
-            for card in cards
-            if normalized
-            in " ".join(
-                [card.issuer_name, card.product_family, card.display_name, card.network]
-            ).casefold()
-        ]
-    return cards[offset : offset + limit]
 
 
 @router.get("/catalogue/cards/{variant_id}", response_model=CardVariantResponse)
@@ -126,36 +128,6 @@ def list_card_rules(variant_id: str, db: Session = Depends(get_db)) -> list[dict
 
 @router.post("/calculations/estimate", response_model=CalculationResult)
 def estimate(request: CalculationInput, db: Session = Depends(get_db)) -> CalculationResult:
-    row = db.scalar(
-        select(Rule)
-        .where(
-            and_(
-                Rule.card_variant_id == request.card_variant_id,
-                Rule.effective_from <= request.scenario_date,
-                or_(Rule.effective_to.is_(None), Rule.effective_to >= request.scenario_date),
-            )
-        )
-        .order_by(Rule.effective_from.desc())
-    )
-    if row is None:
-        raise HTTPException(
-            status_code=404, detail="No active rule for this card on the requested date"
-        )
-    rule_data = {
-        "schema_version": row.schema_version,
-        "rule_id": row.id,
-        "card_variant_id": row.card_variant_id,
-        "rule_type": row.rule_type,
-        "parameters": row.parameters,
-        "effective_from": row.effective_from,
-        "effective_to": row.effective_to,
-        "verification_status": row.verification_status,
-        "evidence_ids": row.evidence_ids or [],
-        "notes": row.notes,
-    }
-    rule = (
-        PointsRule.model_validate(rule_data)
-        if row.rule_type == "points_rate"
-        else CashbackRule.model_validate(rule_data)
-    )
+    """Evaluate one typed rule for a planned purchase using the shared rule resolver."""
+    rule = resolve_rule_for_card(request.card_variant_id, request.scenario_date, db)
     return calculate_reward(request, rule)

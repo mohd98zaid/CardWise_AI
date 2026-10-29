@@ -1,11 +1,16 @@
 import json
+import logging
 from datetime import date
 from pathlib import Path
 
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.db.database import Base, SessionLocal, engine
 from app.db.models import CardVariant, Issuer, Rule, RuleTestCase, Source
+from app.services.admin import provision_admin_user
+
+_logger = logging.getLogger("cardwise.bootstrap")
 
 FIXTURES = (
     "synthetic-cashback-rule.json",
@@ -66,13 +71,29 @@ def _test_case(fixture: dict[str, object]) -> RuleTestCase:
 
 
 def initialize_database() -> None:
-    Base.metadata.create_all(bind=engine)
+    """Initialize database schemas and initial bootstrap fixtures."""
+    # Only run create_all in development or test. Production schemas use Alembic migrations.
+    if settings.app_env != "production":
+        Base.metadata.create_all(bind=engine)
+
     with SessionLocal() as db:
+        # 1. Provision initial administrator if configured via environment
+        if settings.initial_admin_email and settings.initial_admin_password:
+            provision_admin_user(
+                db,
+                settings.initial_admin_email,
+                settings.initial_admin_password,
+                role="admin",
+            )
+
+        # 2. Seed synthetic issuer
         issuer = db.scalar(select(Issuer).where(Issuer.name == "Synthetic Issuer"))
         if issuer is None:
             issuer = Issuer(name="Synthetic Issuer", official_domain="synthetic.example")
             db.add(issuer)
             db.flush()
+
+        # 3. Seed synthetic card variants, sources, and published rules
         fixture_dir = Path(__file__).resolve().parents[3] / "rule-data" / "fixtures"
         for filename in FIXTURES:
             fixture = json.loads((fixture_dir / filename).read_text(encoding="utf-8"))
@@ -96,7 +117,10 @@ def initialize_database() -> None:
                         excerpt=source["excerpt"],
                     )
                 )
-            if db.get(Rule, fixture["rule_id"]) is None:
+
+            # Synthetic baseline rules are published and visibly marked as synthetic
+            existing_rule = db.get(Rule, fixture["rule_id"])
+            if existing_rule is None:
                 db.add(
                     Rule(
                         id=fixture["rule_id"],
@@ -105,15 +129,60 @@ def initialize_database() -> None:
                         schema_version=fixture["schema_version"],
                         parameters=fixture["parameters"],
                         effective_from=date.fromisoformat(fixture["effective_from"]),
-                        verification_status="draft",
-                        review_status="draft",
+                        verification_status="synthetic",
+                        review_status="published",
                         evidence_ids=[source["id"]],
                         notes=fixture["notes"],
                     )
                 )
+            else:
+                # Ensure synthetic rules remain published & marked synthetic
+                if existing_rule.review_status == "draft":
+                    existing_rule.review_status = "published"
+                    existing_rule.verification_status = "synthetic"
+
             if (
                 db.scalar(select(RuleTestCase).where(RuleTestCase.rule_id == fixture["rule_id"]))
                 is None
             ):
                 db.add(_test_case(fixture))
+
+        # 4. Seed an explicit draft fixture for admin review/testing workflow
+        draft_rule_id = "synthetic-draft-cashback-v2"
+        if db.get(Rule, draft_rule_id) is None:
+            db.add(
+                Rule(
+                    id=draft_rule_id,
+                    card_variant_id="synthetic-variant",
+                    rule_type="cashback_rate",
+                    schema_version=1,
+                    parameters={
+                        "rate_percent": "6.0",
+                        "cap_amount": "600.00",
+                        "cap_period": "calendar_month",
+                        "eligible_categories": ["online_shopping"],
+                        "eligible_channels": ["online_card"],
+                    },
+                    effective_from=date(2027, 1, 1),
+                    effective_to=None,
+                    verification_status="draft",
+                    review_status="draft",
+                    evidence_ids=["synthetic-source"],
+                    notes="Proposed future revision awaiting administrative review.",
+                )
+            )
+            if db.scalar(select(RuleTestCase).where(RuleTestCase.rule_id == draft_rule_id)) is None:
+                db.add(
+                    RuleTestCase(
+                        rule_id=draft_rule_id,
+                        case_name="eligible online spend under cap",
+                        input_json={
+                            "amount": "1000.00",
+                            "category": "online_shopping",
+                            "channel": "online_card",
+                        },
+                        expected_json={"gross_reward": "60.00", "cap_amount": "600.00"},
+                    )
+                )
+
         db.commit()

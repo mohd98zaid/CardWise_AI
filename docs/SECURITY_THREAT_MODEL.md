@@ -24,8 +24,8 @@ For incorrect rules, calculation bugs, data access, leaked secrets, compromised 
 ## Risk Register
 
 ### RISK-001: Hardcoded admin email for role assignment
-- **Severity**: High
+- **Severity**: High (Mitigated)
 - **Location**: `backend/app/api/v1/extended.py` — `register` endpoint
-- **Description**: Admin role is granted to the account whose email matches the hardcoded string `admin@cardwise.local`. Any attacker who registers with that email gains full admin access.
-- **Status**: SYNTHETIC-MVP-ONLY — acceptable for local development only.
-- **Mitigation required before production**: Replace with a proper admin provisioning process (e.g., CLI seeding, environment-variable controlled seed email, or an invite-based flow with a separate secrets-managed admin password).
+- **Description**: Previously, admin role was granted to the account whose email matched `admin@cardwise.local`.
+- **Status**: Remediated (October 2026).
+- **Remediation**: Hardcoded email check has been removed completely. All public registrations unconditionally assign role `user`. Privileged administrator provisioning is handled strictly out-of-band via `scripts/provision_admin.py` or configured via `INITIAL_ADMIN_EMAIL`/`INITIAL_ADMIN_PASSWORD` in `backend/app/db/bootstrap.py` with full audit logging.

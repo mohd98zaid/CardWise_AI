@@ -24,10 +24,27 @@ async function request<T>(path: string, options?: RequestInit, token?: string): 
     ...options,
   });
   if (!response.ok) {
-    const body = await response.json().catch(() => null) as { detail?: string; message?: string } | null;
-    throw new Error(body?.message ?? body?.detail ?? "The CardWise API could not complete that request.");
+    const body = (await response.json().catch(() => null)) as
+      | { detail?: string | Array<{ msg?: string }>; message?: string }
+      | null;
+    let errorMessage = "The CardWise API could not complete that request.";
+    if (body?.message) {
+      errorMessage = body.message;
+    } else if (typeof body?.detail === "string") {
+      errorMessage = body.detail;
+    } else if (Array.isArray(body?.detail) && body.detail.length > 0) {
+      errorMessage = body.detail.map((d) => d.msg || JSON.stringify(d)).join(", ");
+    }
+    throw new Error(errorMessage);
   }
-  return response.json() as Promise<T>;
+  if (response.status === 204) {
+    return undefined as unknown as T;
+  }
+  const text = await response.text();
+  if (!text) {
+    return undefined as unknown as T;
+  }
+  return JSON.parse(text) as T;
 }
 
 export function getCards(): Promise<CardVariant[]> {

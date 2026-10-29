@@ -78,7 +78,8 @@ def test_rule_publication_requires_review_and_records_admin_action() -> None:
         headers=headers,
     )
     assert published.status_code == 200
-    assert published.json()["verification_status"] == "verified"
+    # Synthetic fixtures remain visibly synthetic even when published in test workflows
+    assert published.json()["verification_status"] == "synthetic"
 
 
 def test_catalogue_taxonomy_portfolio_and_persisted_trace() -> None:

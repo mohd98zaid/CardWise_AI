@@ -1,8 +1,9 @@
-from datetime import date, datetime
+import zoneinfo
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class UserResponse(BaseModel):
@@ -28,6 +29,22 @@ class AuthResponse(BaseModel):
     access_token: str
     token_type: Literal["bearer"] = "bearer"
     user: UserResponse
+
+
+class UpdatePreferencesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    timezone: str | None = None
+    preferred_currency: Literal["INR"] | None = None
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_iana_timezone(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if value not in zoneinfo.available_timezones():
+            raise ValueError(f"'{value}' is not a valid IANA time zone identifier.")
+        return value
 
 
 class SpendInput(BaseModel):
@@ -97,20 +114,51 @@ class ScenarioCalculationRequest(BaseModel):
 
 
 class ReminderCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     label: str = Field(min_length=1, max_length=200)
     due_at: datetime
     timezone: str = "Asia/Kolkata"
 
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        if value not in zoneinfo.available_timezones():
+            raise ValueError(f"'{value}' is not a valid IANA time zone identifier.")
+        return value
 
-class ReminderResponse(ReminderCreate):
+    @field_validator("due_at")
+    @classmethod
+    def validate_due_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("due_at must include a valid timezone offset.")
+        # Normalize to UTC
+        return value.astimezone(UTC)
+
+
+class ReminderResponse(BaseModel):
     id: str
+    label: str
+    due_at: datetime
+    timezone: str
     status: str
 
 
 class ReminderUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     label: str | None = Field(default=None, min_length=1, max_length=200)
     due_at: datetime | None = None
     status: Literal["active", "dismissed"] | None = None
+
+    @field_validator("due_at")
+    @classmethod
+    def validate_due_at_update(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            raise ValueError("due_at must include a valid timezone offset.")
+        return value.astimezone(UTC)
 
 
 class OptimizerRequest(BaseModel):

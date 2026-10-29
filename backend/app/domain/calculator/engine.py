@@ -28,7 +28,7 @@ def _step(
     reason: str,
     input_values: dict[str, Decimal | str | None],
     output_values: dict[str, Decimal | str | None],
-    rule: CashbackRule,
+    rule: CashbackRule | PointsRule,
 ) -> TraceStep:
     return TraceStep(
         sequence=sequence,
@@ -272,7 +272,7 @@ def calculate_points(request: CalculationInput, rule: PointsRule) -> Calculation
             engine_version=ENGINE_VERSION,
             manifest_hash=manifest_hash,
         )
-    units = _money(request.amount * params.points_per_100 / Decimal("100"))
+    units = (request.amount * params.points_per_100 / Decimal("100")).normalize()
     point_value = request.point_value_per_point or params.point_value
     trace.append(
         _step(
@@ -352,7 +352,7 @@ def _base_result(
     status: str,
     trace: list[TraceStep],
     warnings: list[str],
-    rule: CashbackRule,
+    rule: CashbackRule | PointsRule,
     manifest_hash: str,
 ) -> CalculationResult:
     return CalculationResult(
@@ -362,7 +362,10 @@ def _base_result(
         excluded_spend=Decimal("0.00"),
         currency=request.currency,
         verification_status=rule.verification_status,
-        warnings=warnings + ["This is a synthetic fixture, not a verified issuer term."],
+        warnings=warnings + [
+            "This is a synthetic fixture, not a verified issuer term.",
+            "Annual and joining fees are not deducted from individual transaction calculations.",
+        ],
         evidence_ids=rule.evidence_ids,
         trace=trace,
         engine_version=ENGINE_VERSION,
@@ -391,8 +394,8 @@ def _finalize(
                 len(trace) + 1,
                 "rounding_and_net_value",
                 (
-                    "No fee is allocated in this synthetic fixture; reward value equals "
-                    "estimated net value."
+                    "No transaction-level fee is modeled for this rule; net benefit "
+                    "equals gross reward."
                 ),
                 {"estimated_reward": estimated_reward, "fee": Decimal("0.00")},
                 {"estimated_net_value": estimated_reward},
@@ -425,7 +428,10 @@ def _finalize(
         estimated_net_value=estimated_reward,
         currency=request.currency,
         verification_status=rule.verification_status,
-        warnings=warnings + ["This is a synthetic fixture, not a verified issuer term."],
+        warnings=warnings + [
+            "This is a synthetic fixture, not a verified issuer term.",
+            "Annual and joining fees are not deducted from individual transaction calculations.",
+        ],
         evidence_ids=rule.evidence_ids,
         trace=trace,
         engine_version=ENGINE_VERSION,

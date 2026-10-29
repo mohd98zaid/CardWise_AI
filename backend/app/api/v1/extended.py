@@ -35,9 +35,10 @@ from app.db.models import (
     UserCard,
 )
 from app.domain.calculator.engine import calculate_reward
-from app.domain.calculator.models import CalculationInput
+from app.domain.calculator.models import CalculationInput, CalculationResult
 from app.domain.optimizer import choose_best_cards
 from app.domain.rules.models import CashbackRule, PointsRule
+from app.domain.rules.resolver import resolve_rule_for_card
 from app.domain.scenarios.models import (
     AllocationInput,
     AssistantRequest,
@@ -54,6 +55,7 @@ from app.domain.scenarios.models import (
     ScenarioResponse,
     ScenarioUpdate,
     SpendInput,
+    UpdatePreferencesRequest,
     UserResponse,
 )
 
@@ -95,10 +97,9 @@ def register(
     email = request.email.strip().lower()
     if db.scalar(select(User).where(User.email == email)) is not None:
         raise HTTPException(status_code=409, detail="An account with this email already exists")
-    # SYNTHETIC-MVP-ONLY: Admin role is assigned by hardcoded email.
-    # Replace with a proper provisioning process before any real deployment.
-    # See docs/SECURITY_THREAT_MODEL.md for the risk register entry.
-    role = "admin" if email == "admin@cardwise.local" else "user"
+    # All public registrations are created as standard users.
+    # Administrative accounts must be provisioned out-of-band via trusted CLI or bootstrap.
+    role = "user"
     user = User(email=email, password_hash=hash_password(request.password), role=role)
     db.add(user)
     db.flush()
@@ -138,7 +139,18 @@ def me(user: User = Depends(get_current_user)) -> UserResponse:
 
 @private_router.delete("/me", status_code=204)
 def delete_account(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> None:
-    db.execute(delete(CalculationRun).where(CalculationRun.user_id == user.id))
+    # Cascade delete all child entities owned by the user
+    run_ids = db.scalars(select(CalculationRun.id).where(CalculationRun.user_id == user.id)).all()
+    if run_ids:
+        db.execute(delete(CalculationTraceStep).where(CalculationTraceStep.calculation_run_id.in_(run_ids)))
+        db.execute(delete(CalculationRun).where(CalculationRun.id.in_(run_ids)))
+
+    scenario_ids = db.scalars(select(Scenario.id).where(Scenario.user_id == user.id)).all()
+    if scenario_ids:
+        db.execute(delete(ScenarioAllocation).where(ScenarioAllocation.scenario_id.in_(scenario_ids)))
+        db.execute(delete(ScenarioSpend).where(ScenarioSpend.scenario_id.in_(scenario_ids)))
+        db.execute(delete(Scenario).where(Scenario.id.in_(scenario_ids)))
+
     db.execute(delete(Reminder).where(Reminder.user_id == user.id))
     db.execute(delete(ExportJob).where(ExportJob.user_id == user.id))
     db.execute(delete(UserCard).where(UserCard.user_id == user.id))
@@ -149,18 +161,14 @@ def delete_account(user: User = Depends(get_current_user), db: Session = Depends
 
 @private_router.patch("/me/preferences", response_model=UserResponse)
 def update_preferences(
-    preferences: dict[str, str],
+    preferences: UpdatePreferencesRequest,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> UserResponse:
-    if "timezone" in preferences:
-        user.timezone = preferences["timezone"]
-    if "preferred_currency" in preferences:
-        if preferences["preferred_currency"] != "INR":
-            raise HTTPException(
-                status_code=422, detail="Only INR is supported in the synthetic MVP"
-            )
-        user.preferred_currency = preferences["preferred_currency"]
+    if preferences.timezone is not None:
+        user.timezone = preferences.timezone
+    if preferences.preferred_currency is not None:
+        user.preferred_currency = preferences.preferred_currency
     db.commit()
     db.refresh(user)
     return user_response(user)
@@ -464,26 +472,7 @@ def delete_portfolio_card(
 
 
 def rule_for_card(card_id: str, db: Session) -> CashbackRule | PointsRule:
-    row = db.scalar(select(Rule).where(Rule.card_variant_id == card_id))
-    if row is None:
-        raise HTTPException(status_code=422, detail="No supported rule exists for this card")
-    rule_data = {
-        "schema_version": row.schema_version,
-        "rule_id": row.id,
-        "card_variant_id": row.card_variant_id,
-        "rule_type": row.rule_type,
-        "parameters": row.parameters,
-        "effective_from": row.effective_from,
-        "effective_to": row.effective_to,
-        "verification_status": row.verification_status,
-        "evidence_ids": row.evidence_ids or [],
-        "notes": row.notes,
-    }
-    return (
-        PointsRule.model_validate(rule_data)
-        if row.rule_type == "points_rate"
-        else CashbackRule.model_validate(rule_data)
-    )
+    return resolve_rule_for_card(card_id, datetime.now(UTC).date(), db)
 
 
 @private_router.post("/scenarios/{scenario_id}/calculate")
@@ -496,7 +485,7 @@ def calculate_scenario(
     scenario = owned_scenario(scenario_id, user, db)
     results: list[dict[str, object]] = []
     for card_id in request.card_variant_ids:
-        rule = rule_for_card(card_id, db)
+        rule = resolve_rule_for_card(card_id, scenario.scenario_date, db)
         card_results = []
         for item in scenario.spend:
             calculation = calculate_reward(
@@ -642,7 +631,10 @@ def run_optimizer(
     requested_ids = [card_id for card_id in request.card_variant_ids if card_id in owned_ids]
     if not requested_ids:
         raise HTTPException(status_code=422, detail="Optimizer requires at least one owned card")
-    cards = [(card_id, rule_for_card(card_id, db)) for card_id in requested_ids]
+    cards = [
+        (card_id, resolve_rule_for_card(card_id, scenario.scenario_date, db))
+        for card_id in requested_ids
+    ]
     spend = [
         {
             "amount": item.amount,
@@ -651,6 +643,8 @@ def run_optimizer(
             "scenario_date": scenario.scenario_date,
             "cap_usage": item.cap_usage,
             "cap_state": item.cap_knowledge_state,
+            "point_value_per_point": item.point_value_per_point,
+            "is_fixed": item.is_fixed,
         }
         for item in scenario.spend
     ]
@@ -780,6 +774,16 @@ def create_export(
     return {"id": job.id, "expires_at": job.expires_at, "status": job.status, "data": payload}
 
 
+VALID_REVIEW_TRANSITIONS: dict[str, set[str]] = {
+    "draft": {"in_review", "approved", "rejected", "changes_requested"},
+    "in_review": {"approved", "rejected", "changes_requested"},
+    "changes_requested": {"in_review", "approved", "rejected", "draft"},
+    "rejected": {"draft", "in_review"},
+    "approved": {"published", "changes_requested", "rejected"},
+    "published": {"approved", "superseded", "archived", "changes_requested"},
+}
+
+
 @private_router.get("/exports/{export_id}")
 def get_export(
     export_id: str,
@@ -791,10 +795,14 @@ def get_export(
     )
     if job is None:
         raise HTTPException(status_code=404, detail="Export not found")
-    if job.expires_at < datetime.now(UTC):
+    expires = (
+        job.expires_at if job.expires_at.tzinfo is not None else job.expires_at.replace(tzinfo=UTC)
+    )
+    if expires < datetime.now(UTC):
         job.status = "expired"
+        job.payload = {}
         db.commit()
-        raise HTTPException(status_code=410, detail="Export has expired")
+        raise HTTPException(status_code=410, detail="Export has expired and payload was purged")
     return {"id": job.id, "expires_at": job.expires_at, "status": job.status, "data": job.payload}
 
 
@@ -953,6 +961,12 @@ def review_rule(
     rule = db.get(Rule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="Rule not found")
+    allowed = VALID_REVIEW_TRANSITIONS.get(rule.review_status, set())
+    if decision not in allowed:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Cannot transition rule from '{rule.review_status}' to '{decision}'",
+        )
     rule.review_status = decision
     db.add(
         AuditEvent(
@@ -963,6 +977,36 @@ def review_rule(
     return {"rule_id": rule_id, "review_status": decision}
 
 
+@admin_router.post("/rules/{rule_id}/test", response_model=CalculationResult)
+def test_draft_rule(
+    rule_id: str,
+    request: CalculationInput,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> CalculationResult:
+    rule_row = db.get(Rule, rule_id)
+    if rule_row is None:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    rule_data = {
+        "schema_version": rule_row.schema_version,
+        "rule_id": rule_row.id,
+        "card_variant_id": rule_row.card_variant_id,
+        "rule_type": rule_row.rule_type,
+        "parameters": rule_row.parameters,
+        "effective_from": rule_row.effective_from,
+        "effective_to": rule_row.effective_to,
+        "verification_status": rule_row.verification_status,
+        "evidence_ids": rule_row.evidence_ids or [],
+        "notes": rule_row.notes,
+    }
+    typed_rule = (
+        PointsRule.model_validate(rule_data)
+        if rule_row.rule_type == "points_rate"
+        else CashbackRule.model_validate(rule_data)
+    )
+    return calculate_reward(request, typed_rule)
+
+
 @admin_router.post("/rules/{rule_id}/publish")
 def publish_rule(
     rule_id: str, user: User = Depends(require_admin), db: Session = Depends(get_db)
@@ -970,13 +1014,34 @@ def publish_rule(
     rule = db.get(Rule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="Rule not found")
-    has_tests = db.scalar(select(RuleTestCase).where(RuleTestCase.rule_id == rule_id)) is not None
-    if not rule.evidence_ids or rule.review_status != "approved" or not has_tests:
+    if rule.review_status != "approved":
         raise HTTPException(
             status_code=422,
-            detail="Publication requires evidence, an approved review, and regression tests",
+            detail=f"Publication requires an approved review, currently '{rule.review_status}'",
         )
-    typed_rule = rule_for_card(rule.card_variant_id, db)
+    has_tests = db.scalar(select(RuleTestCase).where(RuleTestCase.rule_id == rule_id)) is not None
+    if not rule.evidence_ids or not has_tests:
+        raise HTTPException(
+            status_code=422,
+            detail="Publication requires evidence and regression tests",
+        )
+    rule_data = {
+        "schema_version": rule.schema_version,
+        "rule_id": rule.id,
+        "card_variant_id": rule.card_variant_id,
+        "rule_type": rule.rule_type,
+        "parameters": rule.parameters,
+        "effective_from": rule.effective_from,
+        "effective_to": rule.effective_to,
+        "verification_status": rule.verification_status,
+        "evidence_ids": rule.evidence_ids or [],
+        "notes": rule.notes,
+    }
+    typed_rule = (
+        PointsRule.model_validate(rule_data)
+        if rule.rule_type == "points_rate"
+        else CashbackRule.model_validate(rule_data)
+    )
     test_cases = db.scalars(select(RuleTestCase).where(RuleTestCase.rule_id == rule_id)).all()
     failed_cases: list[str] = []
     for case in test_cases:
@@ -1000,7 +1065,13 @@ def publish_rule(
             status_code=422,
             detail=f"Regression tests failed: {', '.join(sorted(set(failed_cases)))}",
         )
-    rule.verification_status = "verified"
+    card = db.get(CardVariant, rule.card_variant_id)
+    is_synthetic = (
+        rule.verification_status == "synthetic"
+        or (card is not None and card.verification_status == "synthetic")
+        or rule.id.startswith("synthetic-")
+    )
+    rule.verification_status = "synthetic" if is_synthetic else "verified"
     rule.review_status = "published"
     db.add(
         AuditEvent(actor_id=user.id, action="rule_published", entity_type="rule", entity_id=rule_id)

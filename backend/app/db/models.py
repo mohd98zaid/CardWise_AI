@@ -62,15 +62,15 @@ class Issuer(Base):
 class CardVariant(Base):
     __tablename__ = "card_variants"
     id: Mapped[str] = mapped_column(String(120), primary_key=True)
-    issuer_id: Mapped[str] = mapped_column(ForeignKey("issuers.id"))
+    issuer_id: Mapped[str] = mapped_column(ForeignKey("issuers.id"), index=True)
     product_family: Mapped[str] = mapped_column(String(160))
-    display_name: Mapped[str] = mapped_column(String(200))
-    network: Mapped[str] = mapped_column(String(80))
+    display_name: Mapped[str] = mapped_column(String(200), index=True)
+    network: Mapped[str] = mapped_column(String(80), index=True)
     market: Mapped[str] = mapped_column(String(8), default="IN")
     currency: Mapped[str] = mapped_column(String(3), default="INR")
     valid_from: Mapped[date] = mapped_column(Date)
-    status: Mapped[str] = mapped_column(String(32), default="active")
-    verification_status: Mapped[str] = mapped_column(String(32), default="synthetic")
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    verification_status: Mapped[str] = mapped_column(String(32), default="synthetic", index=True)
     description: Mapped[str] = mapped_column(Text)
 
 

@@ -3,7 +3,7 @@ import os
 from time import perf_counter
 from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -85,13 +85,25 @@ def health() -> dict[str, str]:
 
 
 @app.get("/ready")
-def ready() -> dict[str, str]:
+def ready(request: Request) -> JSONResponse:
+    request_id = request.headers.get("X-Request-ID", str(uuid4()))
     try:
         with SessionLocal() as db:
             db.execute(text("SELECT 1"))
-        return {"status": "ready", "catalogue": "synthetic", "database": "connected"}
+        return JSONResponse(
+            status_code=200,
+            content={"status": "ready", "catalogue": "synthetic", "database": "connected"},
+            headers={"X-Request-ID": request_id},
+        )
     except Exception as exc:
+        logging.getLogger("cardwise.ready").error(
+            "Database readiness check failed: %s (request_id=%s)",
+            exc,
+            request_id,
+            exc_info=True,
+        )
         return JSONResponse(
             status_code=503,
-            content={"status": "degraded", "database": "unavailable", "detail": str(exc)},
+            content={"status": "degraded", "database": "unavailable", "request_id": request_id},
+            headers={"X-Request-ID": request_id},
         )

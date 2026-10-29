@@ -15,6 +15,9 @@ This document describes all environment variables used across CardWise AI backen
 | `AI_PROVIDER` | AI provider configuration (`disabled`, `openai`, etc.) | No | `disabled` | Backend | No |
 | `AI_MODEL` | AI model identifier when AI provider is enabled | No | `""` (empty) | Backend | No |
 | `AUTH_RATE_LIMIT` | Max allowed requests per 60-second window per IP for auth endpoints | No | `10` | Backend | No |
+| `TRUSTED_PROXIES` | Comma-separated IP addresses of reverse proxies trusted for X-Forwarded-For | No | `""` (empty) | Backend | No |
+| `INITIAL_ADMIN_EMAIL` | Optional email to seed the initial administrator account during bootstrap | No | `None` | Backend | No |
+| `INITIAL_ADMIN_PASSWORD` | Optional password for the initial administrator account (min 8 chars) | No | `None` | Backend | Yes |
 | `VITE_API_BASE_URL` | Base URL of the backend API for frontend HTTP client | No | `http://localhost:8000` | Frontend | No |
 
 ## Notes

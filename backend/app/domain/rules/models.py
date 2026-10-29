@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 RuleType = Literal["cashback_rate", "points_rate"]
 VerificationStatus = Literal[
-    "draft", "in_review", "verified", "needs_review", "superseded", "expired"
+    "draft", "in_review", "verified", "needs_review", "superseded", "expired", "synthetic"
 ]
 
 

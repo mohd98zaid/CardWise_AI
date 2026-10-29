@@ -138,23 +138,31 @@ function Catalogue({ cards, onAdd }: { cards: CardVariant[]; onAdd: (id: string)
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [rules, setRules] = useState<CardRule[]>([]);
   const [loadingRules, setLoadingRules] = useState(false);
+  const [rulesError, setRulesError] = useState<string | null>(null);
+
+  async function loadRules(cardId: string) {
+    setLoadingRules(true);
+    setRulesError(null);
+    try {
+      const data = await getCardRules(cardId);
+      setRules(data);
+    } catch (err) {
+      setRules([]);
+      setRulesError(err instanceof Error ? err.message : "Failed to load card rules.");
+    } finally {
+      setLoadingRules(false);
+    }
+  }
 
   async function handleSelectCard(cardId: string) {
     if (selectedCardId === cardId) {
       setSelectedCardId(null);
       setRules([]);
+      setRulesError(null);
       return;
     }
     setSelectedCardId(cardId);
-    setLoadingRules(true);
-    try {
-      const data = await getCardRules(cardId);
-      setRules(data);
-    } catch {
-      setRules([]);
-    } finally {
-      setLoadingRules(false);
-    }
+    await loadRules(cardId);
   }
 
   return (
@@ -185,6 +193,17 @@ function Catalogue({ cards, onAdd }: { cards: CardVariant[]; onAdd: (id: string)
               <h4 style={{ margin: "0 0 0.5rem" }}>Card Rules & Verification</h4>
               {loadingRules ? (
                 <p className="muted">Loading rules...</p>
+              ) : rulesError ? (
+                <div style={{ margin: "0.5rem 0", color: "#c0392b" }}>
+                  <p style={{ margin: "0 0 0.5rem", fontSize: "0.9rem" }}>{rulesError}</p>
+                  <button
+                    className="secondary-button"
+                    style={{ fontSize: "0.8rem", padding: "0.25rem 0.5rem" }}
+                    onClick={() => loadRules(card.id)}
+                  >
+                    Retry loading rules
+                  </button>
+                </div>
               ) : rules.length === 0 ? (
                 <p className="muted">No rules currently listed for this variant.</p>
               ) : (
