@@ -121,13 +121,25 @@ export type Reminder = { id: string; label: string; due_at: string; timezone: st
 export type Citation = {
   source_id: string;
   title: string;
-  url: string;
+  url?: string | null;
+  locator?: string;
+  source_type?: string;
   status: string;
+  rights_status?: string;
+  excerpt?: string;
 };
 
 export type AssistantResult = {
   answer: string;
   abstained: boolean;
+  evidence_level?:
+    | "evidence_found"
+    | "partial_evidence"
+    | "conflicting_evidence"
+    | "stale_evidence"
+    | "no_relevant_evidence"
+    | "insufficient_evidence"
+    | string;
   citations: Citation[];
   unknowns: string[];
   model_version: string;

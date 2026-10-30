@@ -279,6 +279,8 @@ def update_scenario(
         scenario.name = request.name
     if request.scenario_date is not None:
         scenario.scenario_date = request.scenario_date
+    if request.currency is not None:
+        scenario.currency = request.currency
     if request.spend is not None:
         existing_spend_by_id = {item.id: item for item in scenario.spend}
         incoming_ids = {item.id for item in request.spend if item.id is not None}
@@ -890,7 +892,7 @@ def ask_assistant(
 ) -> dict[str, object]:
     result = answer_from_sources(
         request.question,
-        db.scalars(select(Source).where(Source.status == "current")).all(),
+        db.scalars(select(Source)).all(),
     )
     result["user_id"] = user.id
     return result

@@ -1,5 +1,5 @@
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from app.db.models import Source
 
@@ -8,8 +8,17 @@ from app.db.models import Source
 class Citation:
     source_id: str
     title: str
+    url: str | None
     locator: str
+    source_type: str
     status: str
+    rights_status: str
+    excerpt: str
+
+    def to_dict(self) -> dict[str, object]:
+        d = asdict(self)
+        # Omit None url so frontend receives null or undefined cleanly
+        return d
 
 
 STOPWORDS = {
@@ -38,8 +47,9 @@ DOMAIN_TERMS = {
 }
 
 DISCLAIMER = (
-    "This is an evidence-grounded lexical lookup alpha tool. It retrieves indexed source excerpts "
-    "and does not calculate rewards or override authoritative calculation engine rules."
+    "This is a local lexical evidence lookup (alpha). Answers are extracted directly from "
+    "locally indexed source excerpts and may be incomplete or synthetic. They do not constitute "
+    "financial advice, calculated guarantees, or official issuer statements."
 )
 
 
@@ -64,76 +74,163 @@ def _detect_contradiction(candidates: list[Source]) -> bool:
     return has_exclusion and has_inclusion
 
 
+def _build_citation(source: Source) -> dict[str, object]:
+    url = (
+        source.canonical_url.strip()
+        if source.canonical_url and source.canonical_url.strip()
+        else None
+    )
+    return Citation(
+        source_id=source.id,
+        title=source.title or "Untitled Source",
+        url=url,
+        locator=url or "",
+        source_type=getattr(source, "source_type", "synthetic"),
+        status=getattr(source, "status", "under_review"),
+        rights_status=getattr(source, "rights_status", "synthetic_only"),
+        excerpt=source.excerpt or "",
+    ).to_dict()
+
+
 def answer_from_sources(question: str, sources: list[Source]) -> dict[str, object]:
-    """Provide a deterministic evidence-only answer when lexical evidence supports it."""
+    """Provide a deterministic evidence-grounded response distinguishing confidence levels.
+
+    Distinguishes:
+    - evidence_found: Valid lexical match in current sources.
+    - partial_evidence: Partial match or some question terms not covered.
+    - conflicting_evidence: Contradictory inclusion/exclusion detected.
+    - stale_evidence: Matches exist only in stale/superseded sources.
+    - no_relevant_evidence: No sources matched.
+    - insufficient_evidence: Question lacks domain grounding or is too brief.
+    """
     question_terms = _terms(question)
 
-    # Require non-empty question terms and domain-relevant keyword overlap
-    if not question_terms or not (question_terms & DOMAIN_TERMS or len(question_terms) >= 2):
+    # 1. Minimum domain-term criteria: must contain card or rewards domain terms
+    has_domain_terms = bool(question_terms & DOMAIN_TERMS)
+    if not question_terms or not has_domain_terms:
         return {
             "answer": (
-                "I could not find sufficient card or rewards domain terms in your question "
-                "to search verified sources."
+                "I could not find card or rewards domain terms in your question "
+                "to match verified sources."
             ),
             "abstained": True,
+            "evidence_level": "insufficient_evidence",
             "citations": [],
             "unknowns": ["Query did not meet minimum domain-term grounding criteria."],
-            "model_version": "lexical-evidence-only-0.2.0",
-            "prompt_version": "evidence-only-0.2.0",
+            "model_version": "lexical-evidence-only-0.3.0",
+            "prompt_version": "evidence-only-0.3.0",
             "assistant_type": "lexical_lookup_alpha",
             "disclaimer": DISCLAIMER,
         }
 
-    scored: list[tuple[int, Source]] = []
+    # 2. Score sources
+    current_scored: list[tuple[int, set[str], Source]] = []
+    stale_scored: list[tuple[int, set[str], Source]] = []
+
     for source in sources:
-        if source.status != "current" or not source.excerpt:
+        if not source.excerpt:
             continue
         source_terms = _terms(f"{source.title} {source.excerpt}")
         matched = question_terms & source_terms
         if matched and (matched & DOMAIN_TERMS or len(matched) >= 2):
-            scored.append((len(matched), source))
+            if source.status == "current":
+                current_scored.append((len(matched), matched, source))
+            else:
+                stale_scored.append((len(matched), matched, source))
 
-    scored.sort(key=lambda pair: pair[0], reverse=True)
-    matches = [s for _, s in scored]
+    current_scored.sort(key=lambda pair: pair[0], reverse=True)
+    stale_scored.sort(key=lambda pair: pair[0], reverse=True)
 
-    if not matches:
+    # 3. Check if only stale/superseded sources matched
+    if not current_scored and stale_scored:
+        stale_matches = [s for _, _, s in stale_scored]
+        citations = [_build_citation(s) for s in stale_matches[:2]]
         return {
-            "answer": "I could not verify this from the available sources.",
+            "answer": (
+                "The available sources matching your query are stale, superseded, or under review. "
+                "No current active source excerpt supports an answer."
+            ),
             "abstained": True,
-            "citations": [],
-            "unknowns": ["No current source excerpt supports the requested claim."],
-            "model_version": "lexical-evidence-only-0.2.0",
-            "prompt_version": "evidence-only-0.2.0",
+            "evidence_level": "stale_evidence",
+            "citations": citations,
+            "unknowns": [
+                "Matching source(s) are not current. Current terms could not be established."
+            ],
+            "model_version": "lexical-evidence-only-0.3.0",
+            "prompt_version": "evidence-only-0.3.0",
             "assistant_type": "lexical_lookup_alpha",
             "disclaimer": DISCLAIMER,
         }
 
-    if _detect_contradiction(matches):
+    # 4. Check if no sources matched at all
+    if not current_scored:
+        return {
+            "answer": "I could not find relevant evidence in the current indexed sources.",
+            "abstained": True,
+            "evidence_level": "no_relevant_evidence",
+            "citations": [],
+            "unknowns": ["No current source excerpt supports the requested query."],
+            "model_version": "lexical-evidence-only-0.3.0",
+            "prompt_version": "evidence-only-0.3.0",
+            "assistant_type": "lexical_lookup_alpha",
+            "disclaimer": DISCLAIMER,
+        }
+
+    current_matches = [s for _, _, s in current_scored]
+
+    # 5. Check contradiction
+    if _detect_contradiction(current_matches):
         return {
             "answer": (
                 "Sources contain conflicting or contradictory evidence regarding this query. "
                 "Please consult official issuer terms directly."
             ),
             "abstained": True,
-            "citations": [
-                Citation(s.id, s.title, s.canonical_url, s.status).__dict__ for s in matches[:2]
-            ],
+            "evidence_level": "conflicting_evidence",
+            "citations": [_build_citation(s) for s in current_matches[:2]],
             "unknowns": ["Contradictory evidence detected among top-matching sources."],
-            "model_version": "lexical-evidence-only-0.2.0",
-            "prompt_version": "evidence-only-0.2.0",
+            "model_version": "lexical-evidence-only-0.3.0",
+            "prompt_version": "evidence-only-0.3.0",
             "assistant_type": "lexical_lookup_alpha",
             "disclaimer": DISCLAIMER,
         }
 
-    source = matches[0]
-    citation = Citation(source.id, source.title, source.canonical_url, source.status)
+    best_len, best_matched, top_source = current_scored[0]
+    unmatched_query_terms = (question_terms & DOMAIN_TERMS) - best_matched
+
+    unknowns: list[str] = []
+    if getattr(top_source, "rights_status", "") == "synthetic_only" or getattr(
+        top_source, "source_type", ""
+    ) == "synthetic":
+        unknowns.append(
+            "Evidence is derived from a synthetic fixture and does not establish "
+            "a real issuer term."
+        )
+    else:
+        unknowns.append(
+            "Evidence is extracted from local indexed text and has not been independently verified."
+        )
+
+    # Distinguish partial evidence vs evidence found
+    if unmatched_query_terms and len(unmatched_query_terms) >= 2:
+        evidence_level = "partial_evidence"
+        missing_terms_str = ", ".join(sorted(unmatched_query_terms))
+        unknowns.append(f"Partial coverage: source excerpt does not mention {missing_terms_str}.")
+        answer_text = (
+            f"The available source partially addresses your query: {top_source.excerpt}"
+        )
+    else:
+        evidence_level = "evidence_found"
+        answer_text = f"The available source states: {top_source.excerpt}"
+
     return {
-        "answer": f"The available source says: {source.excerpt}",
+        "answer": answer_text,
         "abstained": False,
-        "citations": [citation.__dict__],
-        "unknowns": ["This evidence is synthetic and does not establish a real issuer term."],
-        "model_version": "lexical-evidence-only-0.2.0",
-        "prompt_version": "evidence-only-0.2.0",
+        "evidence_level": evidence_level,
+        "citations": [_build_citation(top_source)],
+        "unknowns": unknowns,
+        "model_version": "lexical-evidence-only-0.3.0",
+        "prompt_version": "evidence-only-0.3.0",
         "assistant_type": "lexical_lookup_alpha",
         "disclaimer": DISCLAIMER,
     }

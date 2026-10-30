@@ -129,24 +129,28 @@ function Workspace({ token, user, onLogout }: { token: string; user: User; onLog
   }
   useEffect(() => { void reload(); }, [token]);
 
-  async function saveScenario(payload: { name: string; scenario_date: string; currency: string; spend: SpendInput[] }) {
+  async function saveScenario(payload: { name: string; scenario_date: string; currency: string; spend: SpendInput[] }): Promise<void> {
     try {
       const created = await createScenario(token, payload);
       setScenarios((items) => [created, ...items]);
       setTab("scenarios");
       setNotice("Scenario saved. You can now compare it or send it to the optimizer.");
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Scenario could not be saved.");
+      const msg = requestError instanceof Error ? requestError.message : "Scenario could not be saved.";
+      setError(msg);
+      throw requestError;
     }
   }
 
-  async function handleUpdateScenario(scenarioId: string, payload: { name?: string; scenario_date?: string; currency?: string; spend?: SpendInput[] }) {
+  async function handleUpdateScenario(scenarioId: string, payload: { name?: string; scenario_date?: string; currency?: string; spend?: SpendInput[] }): Promise<void> {
     try {
       const updated = await updateScenario(token, scenarioId, payload);
       setScenarios((items) => items.map((s) => (s.id === scenarioId ? updated : s)));
       setNotice(`Scenario updated to revision ${updated.revision}. Spend IDs and allocations preserved.`);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Scenario update failed.");
+      const msg = requestError instanceof Error ? requestError.message : "Scenario update failed.";
+      setError(msg);
+      throw requestError;
     }
   }
 
@@ -638,8 +642,8 @@ function Scenarios({
   cards: CardVariant[];
   scenarios: Scenario[];
   comparison: Comparison | null;
-  onSave: (payload: { name: string; scenario_date: string; currency: string; spend: SpendInput[] }) => void;
-  onUpdate: (id: string, payload: { name?: string; scenario_date?: string; currency?: string; spend?: SpendInput[] }) => void;
+  onSave: (payload: { name: string; scenario_date: string; currency: string; spend: SpendInput[] }) => Promise<void>;
+  onUpdate: (id: string, payload: { name?: string; scenario_date?: string; currency?: string; spend?: SpendInput[] }) => Promise<void>;
   onDelete: (id: string) => void;
   onDuplicate: (id: string) => void;
   onCompare: (id: string, cards: string[]) => void;
@@ -649,11 +653,14 @@ function Scenarios({
   const [name, setName] = useState("Monthly online plan");
   const [date, setDate] = useState("2026-06-01");
   const [buckets, setBuckets] = useState<SpendBucketForm[]>([defaultBucket()]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   function startEdit(scenario: Scenario) {
     setEditingScenarioId(scenario.id);
     setName(scenario.name);
     setDate(scenario.scenario_date);
+    setFormError(null);
     setBuckets(
       scenario.spend.map((item) => ({
         id: item.id,
@@ -673,6 +680,7 @@ function Scenarios({
     setName("Monthly online plan");
     setDate("2026-06-01");
     setBuckets([defaultBucket()]);
+    setFormError(null);
   }
 
   function addBucket() {
@@ -691,9 +699,12 @@ function Scenarios({
     );
   }
 
-  function handleSubmit(event: FormEvent) {
+  async function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || isSubmitting) return;
+
+    setFormError(null);
+    setIsSubmitting(true);
 
     const spendPayload: SpendInput[] = buckets.map((b) => ({
       id: b.id,
@@ -706,21 +717,30 @@ function Scenarios({
       point_value_per_point: b.point_value ? b.point_value : null,
     }));
 
-    if (editingScenarioId) {
-      onUpdate(editingScenarioId, {
-        name,
-        scenario_date: date,
-        currency: "INR",
-        spend: spendPayload,
-      });
-      cancelEdit();
-    } else {
-      onSave({
-        name,
-        scenario_date: date,
-        currency: "INR",
-        spend: spendPayload,
-      });
+    try {
+      if (editingScenarioId) {
+        await onUpdate(editingScenarioId, {
+          name,
+          scenario_date: date,
+          currency: "INR",
+          spend: spendPayload,
+        });
+        cancelEdit();
+      } else {
+        await onSave({
+          name,
+          scenario_date: date,
+          currency: "INR",
+          spend: spendPayload,
+        });
+        setName("Monthly online plan");
+        setDate("2026-06-01");
+        setBuckets([defaultBucket()]);
+      }
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Failed to save scenario.");
+    } finally {
+      setIsSubmitting(false);
     }
   }
 
@@ -733,13 +753,31 @@ function Scenarios({
           The optimizer preserves this spend. Multiple buckets are supported under shared card caps.
         </p>
 
+        {formError && (
+          <div className="error-banner" role="alert" style={{ marginBottom: "14px" }}>
+            <span>{formError}</span>
+            <button type="button" onClick={() => setFormError(null)}>×</button>
+          </div>
+        )}
+
         <label>
           Scenario name
-          <input value={name} onChange={(event) => setName(event.target.value)} required />
+          <input
+            value={name}
+            disabled={isSubmitting}
+            onChange={(event) => setName(event.target.value)}
+            required
+          />
         </label>
         <label>
           Scenario date
-          <input type="date" value={date} onChange={(event) => setDate(event.target.value)} required />
+          <input
+            type="date"
+            value={date}
+            disabled={isSubmitting}
+            onChange={(event) => setDate(event.target.value)}
+            required
+          />
         </label>
 
         <div style={{ marginTop: "16px", marginBottom: "8px" }}>
@@ -757,6 +795,7 @@ function Scenarios({
                   type="button"
                   className="text-button"
                   style={{ color: "#a44e40", padding: 0 }}
+                  disabled={isSubmitting}
                   onClick={() => removeBucket(index)}
                 >
                   Remove bucket ✕
@@ -769,6 +808,7 @@ function Scenarios({
                 Category
                 <select
                   value={bucket.category}
+                  disabled={isSubmitting}
                   onChange={(e) => updateBucket(index, { category: e.target.value })}
                 >
                   <option value="online_shopping">Online shopping</option>
@@ -792,6 +832,7 @@ function Scenarios({
                 Channel
                 <select
                   value={bucket.channel}
+                  disabled={isSubmitting}
                   onChange={(e) => updateBucket(index, { channel: e.target.value })}
                 >
                   <option value="online_card">Online card</option>
@@ -818,6 +859,7 @@ function Scenarios({
                     min="0.01"
                     step="0.01"
                     value={bucket.amount}
+                    disabled={isSubmitting}
                     onChange={(e) => updateBucket(index, { amount: e.target.value })}
                     required
                   />
@@ -834,6 +876,7 @@ function Scenarios({
                     step="0.0001"
                     placeholder="Unknown"
                     value={bucket.point_value}
+                    disabled={isSubmitting}
                     onChange={(e) => updateBucket(index, { point_value: e.target.value })}
                   />
                 </div>
@@ -845,6 +888,7 @@ function Scenarios({
                 <input
                   type="checkbox"
                   checked={bucket.is_fixed}
+                  disabled={isSubmitting}
                   onChange={(e) => updateBucket(index, { is_fixed: e.target.checked })}
                 />
                 Fixed allocation (lock to baseline card during optimization)
@@ -854,6 +898,7 @@ function Scenarios({
                 <input
                   type="checkbox"
                   checked={bucket.cap_unknown}
+                  disabled={isSubmitting}
                   onChange={(e) => updateBucket(index, { cap_unknown: e.target.checked })}
                 />
                 Prior monthly cap usage is unknown
@@ -863,20 +908,26 @@ function Scenarios({
         ))}
 
         <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
-          <button type="button" className="secondary-button" onClick={addBucket}>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={isSubmitting}
+            onClick={addBucket}
+          >
             + Add another spend bucket
           </button>
         </div>
 
         <div style={{ display: "flex", gap: "10px", marginTop: "16px" }}>
-          <button className="primary-button" type="submit">
-            {editingScenarioId ? "Update scenario" : "Save scenario"} <span>↗</span>
+          <button className="primary-button" type="submit" disabled={isSubmitting || !name.trim()}>
+            {isSubmitting ? "Saving scenario…" : editingScenarioId ? "Update scenario" : "Save scenario"} <span>↗</span>
           </button>
           {editingScenarioId && (
             <button
               type="button"
               className="secondary-button"
               style={{ marginTop: "7px" }}
+              disabled={isSubmitting}
               onClick={cancelEdit}
             >
               Cancel edit
@@ -910,24 +961,26 @@ function Scenarios({
                   </span>
                 </div>
                 <div className="row-actions">
-                  <button onClick={() => onCompare(scenario.id, cards.map((card) => card.id))}>
+                  <button disabled={isSubmitting} onClick={() => onCompare(scenario.id, cards.map((card) => card.id))}>
                     Compare
                   </button>
-                  <button onClick={() => onOptimize(scenario.id)}>
+                  <button disabled={isSubmitting} onClick={() => onOptimize(scenario.id)}>
                     Optimize
                   </button>
-                  <button title="Edit scenario" onClick={() => startEdit(scenario)}>
+                  <button disabled={isSubmitting} title="Edit scenario" onClick={() => startEdit(scenario)}>
                     ✏️ Edit
                   </button>
                   <button
                     aria-label={`Duplicate ${scenario.name}`}
                     title="Duplicate scenario"
+                    disabled={isSubmitting}
                     onClick={() => onDuplicate(scenario.id)}
                   >
                     ⧉
                   </button>
                   <button
                     title="Delete scenario"
+                    disabled={isSubmitting}
                     style={{ color: "#a44e40" }}
                     onClick={() => {
                       if (window.confirm(`Are you sure you want to delete scenario "${scenario.name}"? This will permanently remove its allocations and trace history.`)) {
@@ -1082,19 +1135,26 @@ function Optimizer({
                 </div>
               ) : (
                 <div>
-                  <span className="tag exhaustive">✓ Exhaustive Global Optimum</span>
+                  <span className="tag exhaustive">✓ Optimal (within modeled rules & assumptions)</span>
                   <p className="muted" style={{ marginTop: "6px", fontSize: "12px" }}>
-                    Mathematically verified global maximum across all possible allocations under shared monthly caps.
+                    Evaluated exhaustively across all combination assignments under modeled rules and shared monthly caps. Does not account for unmodeled fees, non-spend criteria, or unstated terms.
                   </p>
                 </div>
               )}
             </div>
 
             <h2>Spend preserved, value compared.</h2>
+            <p className="muted" style={{ fontSize: "12px", marginTop: "-6px", marginBottom: "12px" }}>
+              All reward figures are mathematical estimates based on current rule parameters, not guaranteed realized savings.
+            </p>
             <div className="optimizer-metrics">
-              <Metric label="Baseline" value={money(result.baseline_value)} />
-              <Metric label="Proposed" value={money(result.proposed_value)} />
-              <Metric label="Incremental" value={money(result.incremental_value)} />
+              <Metric label="Estimated Baseline" value={money(result.baseline_value)} />
+              <Metric label="Estimated Proposed" value={money(result.proposed_value)} />
+              <Metric label="Estimated Incremental" value={money(result.incremental_value)} />
+            </div>
+
+            <div className="principle-banner" style={{ background: "#f8faf7", border: "1px solid #dce8de", padding: "10px 14px", borderRadius: "8px", margin: "12px 0", fontSize: "12px", color: "#2d4a3e" }}>
+              <strong>Responsible Planning Notice:</strong> Recommendations optimize existing planned spend only. Never increase spending solely to earn rewards or unlock reward tiers.
             </div>
 
             {result.has_cap_uncertainty && result.conservative_proposed_value && (
@@ -1196,7 +1256,7 @@ function Assistant({ token }: { token: string }) {
         <div className="eyebrow">TERMS ASSISTANT</div>
         <h2>Ask, but keep evidence in charge.</h2>
         <p className="muted">
-          The assistant is strictly grounded in verified source excerpts. It never fabricates citations and discloses uncertainties when evidence is partial.
+          The assistant is a local lexical evidence lookup (alpha) over indexed source excerpts. It discloses when evidence is partial, conflicting, synthetic, or unverified. It does not provide financial advice.
         </p>
 
         <form onSubmit={ask}>
@@ -1210,7 +1270,7 @@ function Assistant({ token }: { token: string }) {
             />
           </label>
           <button className="primary-button" disabled={loading || !question.trim()}>
-            {loading ? "Checking authoritative sources…" : "Ask assistant"}
+            {loading ? "Checking indexed local sources…" : "Ask assistant"}
             <span>↗</span>
           </button>
         </form>
@@ -1230,15 +1290,39 @@ function Assistant({ token }: { token: string }) {
               <span
                 className="tag"
                 style={{
-                  background: result.abstained ? "#fffbe6" : "#f6ffed",
-                  color: result.abstained ? "#d48806" : "#389e0d",
+                  background:
+                    result.evidence_level === "evidence_found"
+                      ? "#f6ffed"
+                      : result.evidence_level === "partial_evidence"
+                      ? "#fffbe6"
+                      : "#fff1f0",
+                  color:
+                    result.evidence_level === "evidence_found"
+                      ? "#389e0d"
+                      : result.evidence_level === "partial_evidence"
+                      ? "#d48806"
+                      : "#cf1322",
                   fontWeight: 600,
                   fontSize: "11px",
                 }}
               >
-                {result.abstained ? "ABSTAINED / UNVERIFIED" : "VERIFIED SOURCE EVIDENCE"}
+                {result.evidence_level === "evidence_found"
+                  ? "LOCAL EVIDENCE FOUND (SYNTHETIC / UNVERIFIED)"
+                  : result.evidence_level === "partial_evidence"
+                  ? "PARTIAL EVIDENCE DETECTED"
+                  : result.evidence_level === "conflicting_evidence"
+                  ? "CONFLICTING EVIDENCE (ABSTAINED)"
+                  : result.evidence_level === "stale_evidence"
+                  ? "STALE / SUPERSEDED SOURCES (ABSTAINED)"
+                  : result.evidence_level === "no_relevant_evidence"
+                  ? "NO RELEVANT EVIDENCE (ABSTAINED)"
+                  : result.evidence_level === "insufficient_evidence"
+                  ? "INSUFFICIENT DOMAIN TERMS (ABSTAINED)"
+                  : result.abstained
+                  ? "ABSTAINED / UNVERIFIED"
+                  : "LOCAL EVIDENCE MATCH"}
               </span>
-              <small className="muted">{result.assistant_type}</small>
+              <small className="muted">Engine: {result.assistant_type || "lexical_lookup_alpha"}</small>
             </div>
 
             <p style={{ fontSize: "14px", fontWeight: 500, color: "#1e3028", marginTop: "12px" }}>
@@ -1247,27 +1331,41 @@ function Assistant({ token }: { token: string }) {
 
             <div style={{ marginTop: "14px" }}>
               <strong style={{ fontSize: "12px", color: "#315943" }}>
-                Authoritative Source Citations ({result.citations.length})
+                Supporting Source Citations ({result.citations.length})
               </strong>
               {result.citations.length === 0 ? (
                 <p className="muted" style={{ margin: "6px 0", fontSize: "12px" }}>
-                  No citations returned by authoritative sources.
+                  No matching indexed source excerpts available.
                 </p>
               ) : (
                 result.citations.map((c, idx) => (
                   <div className="citation-card" key={idx}>
-                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <strong>{c.title}</strong>
-                      <span className="tag">{c.status}</span>
+                      <div style={{ display: "flex", gap: "4px" }}>
+                        <span className="tag">{c.status}</span>
+                        {c.source_type && <span className="tag">{c.source_type}</span>}
+                      </div>
                     </div>
-                    {c.url && (
+                    {c.url ? (
                       <div style={{ marginTop: "4px" }}>
                         <a href={c.url} target="_blank" rel="noopener noreferrer">
                           {c.url}
                         </a>
                       </div>
+                    ) : (
+                      <div style={{ marginTop: "4px" }}>
+                        <small className="muted">No canonical web URL available</small>
+                      </div>
                     )}
-                    <small className="muted">Source ID: {c.source_id}</small>
+                    {c.excerpt && (
+                      <blockquote style={{ margin: "6px 0", fontSize: "12px", color: "#444", borderLeft: "2px solid #ccc", paddingLeft: "8px" }}>
+                        "{c.excerpt}"
+                      </blockquote>
+                    )}
+                    <small className="muted">
+                      Source ID: {c.source_id} {c.rights_status ? `· Rights: ${c.rights_status}` : ""}
+                    </small>
                   </div>
                 ))
               )}

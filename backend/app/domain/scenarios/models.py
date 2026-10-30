@@ -95,6 +95,7 @@ class ScenarioUpdate(BaseModel):
 
     name: str | None = Field(default=None, min_length=1, max_length=160)
     scenario_date: date | None = None
+    currency: Literal["INR"] | None = None
     spend: list[SpendInput] | None = None
 
 

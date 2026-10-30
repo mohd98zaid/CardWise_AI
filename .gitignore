@@ -36,6 +36,10 @@ env/
 htmlcov/
 .tox/
 .nox/
+test-results/
+frontend/test-results/
+playwright-report/
+frontend/playwright-report/
 
 # Node / Frontend
 node_modules/

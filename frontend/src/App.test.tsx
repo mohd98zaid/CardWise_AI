@@ -264,6 +264,44 @@ describe("CardWise AI — Frontend End-to-End Component Tests", () => {
     });
   });
 
+  it("preserves user inputs in scenario editor when update fails, and displays form error", async () => {
+    localStorage.setItem("cardwise_token", "mock-jwt-token");
+    mockedApi.getMe.mockResolvedValue(mockUser);
+
+    mockedApi.updateScenario.mockRejectedValueOnce(
+      new Error("Network connection dropped: failed to persist revision.")
+    );
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("1 active card reference in your portfolio")).toBeInTheDocument());
+
+    const nav = screen.getByRole("navigation", { name: "Main navigation" });
+    fireEvent.click(within(nav).getByRole("button", { name: /Scenarios/i }));
+
+    // Start editing
+    const editButton = screen.getByTitle("Edit scenario");
+    fireEvent.click(editButton);
+    expect(screen.getByText("EDIT SCENARIO")).toBeInTheDocument();
+
+    // Change scenario name and planned spend
+    const nameInput = screen.getByLabelText(/Scenario name/i);
+    fireEvent.change(nameInput, { target: { value: "Modified Name Attempt" } });
+
+    // Submit update (which will fail)
+    fireEvent.click(screen.getByRole("button", { name: /Update scenario/i }));
+
+    // Verify error is displayed
+    await waitFor(() => {
+      expect(
+        screen.getAllByText(/Network connection dropped: failed to persist revision/i).length
+      ).toBeGreaterThan(0);
+    });
+
+    // Verify editor stays open in EDIT mode and retains input!
+    expect(screen.getByText("EDIT SCENARIO")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Modified Name Attempt")).toBeInTheDocument();
+  });
+
   it("distinguishes exhaustive optimal results from heuristic optimizer results", async () => {
     localStorage.setItem("cardwise_token", "mock-jwt-token");
     mockedApi.getMe.mockResolvedValue(mockUser);
@@ -330,6 +368,7 @@ describe("CardWise AI — Frontend End-to-End Component Tests", () => {
     const verifiedAssistantResponse: AssistantResult = {
       answer: "HDFC Millennia offers 5% cashback on Amazon, Flipkart, and Myntra.",
       abstained: false,
+      evidence_level: "evidence_found",
       citations: [
         {
           source_id: "src-1",
@@ -364,7 +403,7 @@ describe("CardWise AI — Frontend End-to-End Component Tests", () => {
     });
 
     // Verified badge rendered
-    expect(screen.getByText(/VERIFIED SOURCE EVIDENCE/i)).toBeInTheDocument();
+    expect(screen.getByText(/LOCAL EVIDENCE FOUND/i)).toBeInTheDocument();
     expect(screen.getByText(/HDFC Millennia offers 5% cashback/i)).toBeInTheDocument();
 
     // Real citations rendered with link
