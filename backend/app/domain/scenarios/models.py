@@ -150,7 +150,7 @@ class ReminderUpdate(BaseModel):
 
     label: str | None = Field(default=None, min_length=1, max_length=200)
     due_at: datetime | None = None
-    status: Literal["active", "dismissed"] | None = None
+    status: Literal["active", "completed", "dismissed"] | None = None
 
     @field_validator("due_at")
     @classmethod

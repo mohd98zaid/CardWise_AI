@@ -62,6 +62,9 @@ def _card_gross_reward(
     return None
 
 
+COMBINATION_LIMIT: int = 100_000
+
+
 def choose_best_cards(
     spend: list[dict[str, object]],
     cards: list[tuple[str, CashbackRule | PointsRule]],
@@ -183,9 +186,14 @@ def choose_best_cards(
         return {
             "method_version": OPTIMIZER_VERSION,
             "plan_status": "infeasible",
+            "search_mode": "exhaustive",
+            "is_heuristic": False,
             "baseline_value": "0.00",
             "proposed_value": "0.00",
             "incremental_value": "0.00",
+            "has_cap_uncertainty": False,
+            "conservative_proposed_value": "0.00",
+            "conservative_incremental_value": "0.00",
             "total_spend_preserved": False,
             "planned_spend": str(total_planned),
             "allocated_spend": "0.00",
@@ -242,14 +250,23 @@ def choose_best_cards(
 
     best_assignment: tuple[str, ...] = baseline_assignment
     best_value: Decimal = Decimal("-1.00")
+    search_mode: str = "exhaustive"
+    is_heuristic: bool = False
 
-    if total_combinations <= 100_000:
+    if total_combinations <= COMBINATION_LIMIT:
         for candidate in product(*possible_choices):
             val, _ = evaluate_assignment(candidate)
             if val > best_value:
                 best_value = val
                 best_assignment = candidate
     else:
+        search_mode = "greedy_heuristic"
+        is_heuristic = True
+        warnings.append(
+            f"Search space exceeded {COMBINATION_LIMIT:,} combinations ({total_combinations:,}); "
+            "evaluated using greedy marginal heuristic. This allocation is an approximation "
+            "and is not proven globally optimal."
+        )
         # Greedy heuristic for larger problems: sort buckets by amount desc,
         # assign to card with highest marginal reward
         current_gross: dict[str, Decimal] = {cid: Decimal("0.00") for cid in card_specs}
@@ -310,12 +327,16 @@ def choose_best_cards(
             f"cards. Upper-bound proposed reward is ₹{_money(proposed_total)}, while "
             f"conservative estimate is ₹{_money(conservative_proposed_total)}."
         )
+    elif is_heuristic:
+        plan_status = "heuristic"
     else:
         plan_status = "optimal"
 
     return {
         "method_version": OPTIMIZER_VERSION,
         "plan_status": plan_status,
+        "search_mode": search_mode,
+        "is_heuristic": is_heuristic,
         "baseline_value": str(_money(baseline_total)),
         "proposed_value": str(_money(proposed_total)),
         "incremental_value": str(_money(proposed_total - baseline_total)),

@@ -357,3 +357,197 @@ def test_optimizer_unknown_cap_state_discloses_uncertainty_and_bounds() -> None:
     assert "conservative_proposed_value" in res
     assert Decimal(res["conservative_proposed_value"]) <= Decimal(res["proposed_value"])
     assert any("uncertainty" in w.lower() for w in res["warnings"])
+
+
+def test_scenario_update_preserves_spend_ids_and_increments_revision() -> None:
+    user_client, user_headers = authenticated_client()
+    variant_id = "synthetic-variant"
+
+    user_client.post(f"/api/v1/me/cards?card_variant_id={variant_id}", headers=user_headers)
+
+    # 1. Create a multi-bucket scenario
+    create_resp = user_client.post(
+        "/api/v1/me/scenarios",
+        headers=user_headers,
+        json={
+            "name": "Multi-bucket baseline",
+            "scenario_date": "2026-06-01",
+            "currency": "INR",
+            "spend": [
+                {
+                    "category": "dining",
+                    "channel": "pos_card",
+                    "amount": "1500.00",
+                    "cap_knowledge_state": "known",
+                },
+                {
+                    "category": "online_shopping",
+                    "channel": "online_card",
+                    "amount": "3000.00",
+                    "cap_knowledge_state": "known",
+                },
+            ],
+        },
+    )
+    assert create_resp.status_code in {200, 201}
+    scenario = create_resp.json()
+    scenario_id = scenario["id"]
+    initial_revision = scenario["revision"]
+    assert len(scenario["spend"]) == 2
+    spend_0_id = scenario["spend"][0]["id"]
+    spend_1_id = scenario["spend"][1]["id"]
+    assert spend_0_id is not None
+    assert spend_1_id is not None
+
+    # 2. Update scenario preserving spend_0_id, modifying amount, and adding a third bucket
+    patch_resp = user_client.patch(
+        f"/api/v1/me/scenarios/{scenario_id}",
+        headers=user_headers,
+        json={
+            "name": "Multi-bucket updated",
+            "spend": [
+                {
+                    "id": spend_0_id,
+                    "category": "dining",
+                    "channel": "pos_card",
+                    "amount": "2000.00",
+                    "cap_knowledge_state": "known",
+                },
+                {
+                    "id": spend_1_id,
+                    "category": "online_shopping",
+                    "channel": "online_card",
+                    "amount": "3500.00",
+                    "cap_knowledge_state": "known",
+                },
+                {
+                    "category": "groceries",
+                    "channel": "pos_card",
+                    "amount": "1200.00",
+                    "cap_knowledge_state": "known",
+                },
+            ],
+        },
+    )
+    assert patch_resp.status_code == 200
+    updated = patch_resp.json()
+    assert updated["name"] == "Multi-bucket updated"
+    assert updated["revision"] == initial_revision + 1
+    assert len(updated["spend"]) == 3
+
+    # Check preserved IDs
+    updated_ids = {s["id"] for s in updated["spend"]}
+    assert spend_0_id in updated_ids
+    assert spend_1_id in updated_ids
+
+    # Check modified amount
+    spend_0_updated = next(s for s in updated["spend"] if s["id"] == spend_0_id)
+    assert Decimal(spend_0_updated["amount"]) == Decimal("2000.00")
+
+    # 3. Optimizer succeeds on the updated scenario
+    opt_resp = user_client.post(
+        "/api/v1/optimizer/run",
+        headers=user_headers,
+        json={
+            "scenario_id": scenario_id,
+            "card_variant_ids": [variant_id],
+        },
+    )
+    assert opt_resp.status_code == 200
+    res = opt_resp.json()
+    assert res["search_mode"] == "exhaustive"
+    assert res["is_heuristic"] is False
+
+
+def test_optimizer_reports_heuristic_search_mode_when_combinations_exceed_threshold() -> None:
+    from unittest.mock import patch
+
+    user_client, user_headers = authenticated_client()
+    variant_id = "synthetic-variant"
+    user_client.post(f"/api/v1/me/cards?card_variant_id={variant_id}", headers=user_headers)
+
+    sc_resp = user_client.post(
+        "/api/v1/me/scenarios",
+        headers=user_headers,
+        json={
+            "name": "Combinations test",
+            "scenario_date": "2026-06-01",
+            "currency": "INR",
+            "spend": [
+                {
+                    "category": "online_shopping",
+                    "channel": "online_card",
+                    "amount": "1000.00",
+                    "cap_knowledge_state": "known",
+                },
+                {
+                    "category": "online_shopping",
+                    "channel": "online_card",
+                    "amount": "2000.00",
+                    "cap_knowledge_state": "known",
+                },
+            ],
+        },
+    )
+    scenario_id = sc_resp.json()["id"]
+
+    # Patch COMBINATION_LIMIT to 0 so any combinations (>0) triggers greedy_heuristic
+    with patch("app.domain.optimizer.COMBINATION_LIMIT", 0):
+        opt_resp = user_client.post(
+            "/api/v1/optimizer/run",
+            headers=user_headers,
+            json={
+                "scenario_id": scenario_id,
+                "card_variant_ids": [variant_id],
+            },
+        )
+        assert opt_resp.status_code == 200
+        res = opt_resp.json()
+        assert res["search_mode"] == "greedy_heuristic"
+        assert res["is_heuristic"] is True
+        assert res["plan_status"] == "heuristic"
+        assert any("heuristic" in w.lower() for w in res["warnings"])
+
+
+def test_reminder_patch_and_export_lifecycle() -> None:
+    user_client, user_headers = authenticated_client()
+
+    # 1. Create reminder
+    rem_resp = user_client.post(
+        "/api/v1/reminders",
+        headers=user_headers,
+        json={"label": "Pay credit card bill", "due_at": "2026-11-05T12:00:00Z"},
+    )
+    assert rem_resp.status_code in {200, 201}
+    reminder_id = rem_resp.json()["id"]
+
+    # 2. Update reminder status and label
+    patch_rem = user_client.patch(
+        f"/api/v1/reminders/{reminder_id}",
+        headers=user_headers,
+        json={"label": "Pay bill immediately", "status": "completed"},
+    )
+    assert patch_rem.status_code == 200
+    assert patch_rem.json()["label"] == "Pay bill immediately"
+    assert patch_rem.json()["status"] == "completed"
+
+    # 3. Create export
+    exp_resp = user_client.post("/api/v1/exports", headers=user_headers)
+    assert exp_resp.status_code in {200, 201}
+    export_id = exp_resp.json()["id"]
+
+    # 4. Fetch export
+    get_exp = user_client.get(f"/api/v1/exports/{export_id}", headers=user_headers)
+    assert get_exp.status_code == 200
+    exp_data = get_exp.json()
+    assert exp_data["id"] == export_id
+    assert "data" in exp_data
+
+    # 5. Delete export
+    del_exp = user_client.delete(f"/api/v1/exports/{export_id}", headers=user_headers)
+    assert del_exp.status_code == 204
+
+    # 6. Verify 404 after deletion
+    get_del = user_client.get(f"/api/v1/exports/{export_id}", headers=user_headers)
+    assert get_del.status_code == 404
+

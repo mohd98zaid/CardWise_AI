@@ -280,10 +280,27 @@ def update_scenario(
     if request.scenario_date is not None:
         scenario.scenario_date = request.scenario_date
     if request.spend is not None:
-        scenario.spend.clear()
+        existing_spend_by_id = {item.id: item for item in scenario.spend}
+        incoming_ids = {item.id for item in request.spend if item.id is not None}
+
+        # Keep existing spend items that remain present
+        scenario.spend = [s for s in scenario.spend if s.id in incoming_ids]
+
+        # Update existing items in-place to preserve IDs and allocations; append new ones
         for item in request.spend:
-            scenario.spend.append(
-                ScenarioSpend(
+            if item.id and item.id in existing_spend_by_id:
+                existing = existing_spend_by_id[item.id]
+                existing.category = item.category
+                existing.channel = item.channel
+                existing.amount = item.amount
+                existing.transaction_count = item.transaction_count
+                existing.is_fixed = item.is_fixed
+                existing.cap_usage = item.cap_usage
+                existing.cap_knowledge_state = item.cap_knowledge_state
+                existing.point_value_per_point = item.point_value_per_point
+            else:
+                new_spend = ScenarioSpend(
+                    scenario_id=scenario.id,
                     category=item.category,
                     channel=item.channel,
                     amount=item.amount,
@@ -293,7 +310,9 @@ def update_scenario(
                     cap_knowledge_state=item.cap_knowledge_state,
                     point_value_per_point=item.point_value_per_point,
                 )
-            )
+                if item.id:
+                    new_spend.id = item.id
+                scenario.spend.append(new_spend)
     scenario.revision += 1
     scenario.updated_at = datetime.now(UTC)
     db.commit()

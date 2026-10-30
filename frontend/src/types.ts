@@ -100,6 +100,8 @@ export type OptimizerResult = {
   scenario_id: string;
   method_version: string;
   plan_status: string;
+  search_mode?: "exhaustive" | "greedy_heuristic" | string;
+  is_heuristic?: boolean;
   baseline_value: string;
   proposed_value: string;
   incremental_value: string;
@@ -115,6 +117,32 @@ export type OptimizerResult = {
 };
 
 export type Reminder = { id: string; label: string; due_at: string; timezone: string; status: string };
+
+export type Citation = {
+  source_id: string;
+  title: string;
+  url: string;
+  status: string;
+};
+
+export type AssistantResult = {
+  answer: string;
+  abstained: boolean;
+  citations: Citation[];
+  unknowns: string[];
+  model_version: string;
+  prompt_version: string;
+  assistant_type: string;
+  disclaimer: string;
+  user_id?: string;
+};
+
+export type ExportJobResponse = {
+  id: string;
+  expires_at: string;
+  status: string;
+  data: Record<string, unknown>;
+};
 
 export type CardRule = {
   id: string;

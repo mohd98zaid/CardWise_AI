@@ -155,5 +155,17 @@ textarea { background: #fbfcfb; border: 1px solid #cddbd1; border-radius: 8px; c
 .abstain-box span { font: 10px "DM Mono", monospace; text-transform: uppercase; }
 .privacy-list { display: grid; gap: 10px; margin-top: 23px; color: #557564; font-size: 12px; }
 .reminder-row small { margin: 0; }
+.spend-bucket-card { background: #fdfefd; border: 1px solid #dce8de; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+.spend-bucket-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-weight: 600; font-size: 12px; color: #355843; }
+.citation-card { background: #ffffff; border: 1px solid #e1e9e2; border-radius: 6px; padding: 10px; margin-top: 8px; font-size: 12px; }
+.citation-card a { color: #285441; word-break: break-all; }
+.download-button { background: #285441; border: 1px solid #1d3d31; border-radius: 7px; color: #fff; cursor: pointer; font-size: 12px; padding: 9px 12px; font-weight: 600; }
+.download-button:hover { background: #1d3d31; }
+.tag.heuristic { background: #fffbe6; color: #d48806; border: 1px solid #ffe58f; font-weight: 600; }
+.tag.exhaustive { background: #f6ffed; color: #389e0d; border: 1px solid #b7eb8f; font-weight: 600; }
+.tag.uncertain { background: #fff2e8; color: #d4380d; border: 1px solid #ffbb96; font-weight: 600; }
+.tag.partial { background: #fff0f6; color: #c41d7f; border: 1px solid #ffadd2; font-weight: 600; }
+.tag.completed { background: #f0f5ff; color: #1d39c4; border: 1px solid #adc6ff; }
+.badge { display: inline-block; padding: 2px 6px; font-size: 10px; font-family: "DM Mono", monospace; border-radius: 4px; }
 @media (max-width: 850px) { .app-layout { grid-template-columns: 1fr; } .sidebar { flex-direction: row; overflow-x: auto; } .nav-item { flex: 0 0 auto; } .dashboard-lower, .scenario-layout, .optimizer-layout, .settings-grid { grid-template-columns: 1fr; } }
 @media (max-width: 600px) { .app-shell { padding: 16px; } .dashboard-grid { grid-template-columns: 1fr; } .content-top { gap: 12px; } .content-top .alpha-badge { display: none; } .auth-card { padding: 25px; } .row-actions button { font-size: 9px; padding: 6px; } }

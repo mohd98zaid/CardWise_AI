@@ -1,10 +1,12 @@
 import type {
+  AssistantResult,
   AuthResponse,
   CardRule,
   CardVariant,
   CalculationRequest,
   CalculationResult,
   Comparison,
+  ExportJobResponse,
   OptimizerResult,
   Reminder,
   Scenario,
@@ -75,6 +77,21 @@ export function createScenario(token: string, payload: { name: string; scenario_
   return request<Scenario>("/api/v1/me/scenarios", { method: "POST", body: JSON.stringify(payload) }, token);
 }
 
+export function updateScenario(
+  token: string,
+  scenarioId: string,
+  payload: { name?: string; scenario_date?: string; currency?: string; spend?: SpendInput[] }
+): Promise<Scenario> {
+  return request<Scenario>(`/api/v1/me/scenarios/${scenarioId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  }, token);
+}
+
+export function deleteScenario(token: string, scenarioId: string): Promise<void> {
+  return request<void>(`/api/v1/me/scenarios/${scenarioId}`, { method: "DELETE" }, token);
+}
+
 export function duplicateScenario(token: string, id: string): Promise<Scenario> {
   return request<Scenario>(`/api/v1/me/scenarios/${id}/duplicate`, { method: "POST" }, token);
 }
@@ -128,4 +145,30 @@ export function getCardRules(variantId: string): Promise<CardRule[]> {
 
 export function deleteReminder(token: string, reminderId: string): Promise<void> {
   return request<void>(`/api/v1/reminders/${reminderId}`, { method: "DELETE" }, token);
+}
+
+export function updateReminder(
+  token: string,
+  reminderId: string,
+  payload: { label?: string; due_at?: string; status?: string }
+): Promise<Reminder> {
+  return request<Reminder>(`/api/v1/reminders/${reminderId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  }, token);
+}
+
+export function getExport(token: string, exportId: string): Promise<ExportJobResponse> {
+  return request<ExportJobResponse>(`/api/v1/exports/${exportId}`, undefined, token);
+}
+
+export function deleteExport(token: string, exportId: string): Promise<void> {
+  return request<void>(`/api/v1/exports/${exportId}`, { method: "DELETE" }, token);
+}
+
+export function askAssistant(token: string, question: string): Promise<AssistantResult> {
+  return request<AssistantResult>("/api/v1/assistant/ask", {
+    method: "POST",
+    body: JSON.stringify({ question }),
+  }, token);
 }
